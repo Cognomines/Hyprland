@@ -7,6 +7,7 @@
 #include "../../helpers/time/Timer.hpp"
 #include "InputMethodRelay.hpp"
 #include "PointerConstraintController.hpp"
+#include "Seat.hpp"
 #include "../../helpers/signal/Signal.hpp"
 #include "../../desktop/view/WLSurface.hpp"
 #include "../../devices/IPointer.hpp"
@@ -179,15 +180,11 @@ class CInputManager {
     STouchData         m_touchData;
 
     // for refocus to be forced
-    PHLWINDOWREF                 m_forcedFocus;
+    PHLWINDOWREF m_forcedFocus;
 
-    std::vector<SP<IKeyboard>>   m_keyboards;
-    std::vector<SP<IPointer>>    m_pointers;
-    std::vector<SP<ITouch>>      m_touches;
-    std::vector<SP<CTablet>>     m_tablets;
-    std::vector<SP<CTabletTool>> m_tabletTools;
-    std::vector<SP<CTabletPad>>  m_tabletPads;
-    std::vector<WP<IHID>>        m_hids; // general container for all HID devices connected to the input manager.
+    // the ambient seat: until seats are configurable (see logicalseats.md),
+    // this is always the default seat and holds all devices.
+    SP<CSeat> seat();
 
     // Switches
     std::list<SSwitchDevice> m_switches;
@@ -255,6 +252,10 @@ class CInputManager {
     bool                 m_cursorImageOverridden = false;
     eBorderIconDirection m_borderIconDirection   = BORDERICON_NONE;
 
+    // the ambient seat: until seats are configurable (see logicalseats.md),
+    // this is always the default seat and holds all devices.
+    SP<CSeat> seat();
+
     // for click behavior override
     eClickBehaviorMode m_clickBehavior        = CLICKMODE_DEFAULT;
     Vector2D           m_lastCursorPosFloored = Vector2D();
@@ -288,18 +289,6 @@ class CInputManager {
     double   m_mousePosDelta  = 0;
     bool     m_lastInputMouse = true;
 
-    // for holding focus on buttons held
-    bool m_focusHeldByButtons   = false;
-    bool m_refocusHeldByButtons = false;
-
-    struct SHeldPointerButton {
-        uint32_t     button = 0;
-        WP<IPointer> pointer;
-    };
-
-    // for releasing mouse buttons
-    std::list<SHeldPointerButton> m_currentlyHeldButtons;
-
     // idle inhibitors
     struct SIdleInhibitor {
         SP<CIdleInhibitor>  inhibitor;
@@ -320,15 +309,6 @@ class CInputManager {
     } m_cursorSurfaceInfo;
 
     void restoreCursorIconToApp(); // no-op if restored
-
-    // discrete scrolling emulation using v120 data
-    struct {
-        bool     lastEventSign     = false;
-        bool     lastEventAxis     = false;
-        uint32_t lastEventTime     = 0;
-        uint32_t accumulatedScroll = 0;
-    } m_scrollWheelState;
-    bool                  m_pointerAxisFramePending = false;
 
     bool                  shareKeyFromAllKBs(uint32_t key, bool pressed);
     Input::ModifierMask   shareModsFromAllKBs(Input::ModifierMask mask);

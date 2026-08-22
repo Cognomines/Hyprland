@@ -114,14 +114,22 @@ CInputManager::CInputManager() {
     m_pointerConstraints.init();
 }
 
+SP<CSeat> CInputManager::seat() {
+    return g_pSeatManager->defaultSeat();
+}
+
 CInputManager::~CInputManager() {
     m_constraints.clear();
-    m_keyboards.clear();
-    m_pointers.clear();
-    m_touches.clear();
-    m_tablets.clear();
-    m_tabletTools.clear();
-    m_tabletPads.clear();
+    if (g_pSeatManager) {
+        for (auto const& s : g_pSeatManager->seats()) {
+            s->m_keyboards.clear();
+            s->m_pointers.clear();
+            s->m_touches.clear();
+            s->m_tablets.clear();
+            s->m_tabletTools.clear();
+            s->m_tabletPads.clear();
+        }
+    }
     m_idleInhibitors.clear();
     m_switches.clear();
 }
@@ -248,6 +256,7 @@ void CInputManager::sendMotionEventsToFocused() {
 void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> overridePos, bool pointerOnly) {
     if (!pointerOnly)
         m_lastInputMouse = mouse;
+    const auto SEAT = seat();
 
     if (g_pCompositor->m_isShuttingDown)
         return;
@@ -389,7 +398,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
 
     // if we are holding a pointer button,
     // and we're not dnd-ing, don't refocus. Keep focus on last surface.
-    if (!overridePos.has_value() && !PROTO::data->dndActive() && !m_currentlyHeldButtons.empty() && Desktop::focusState()->surface() &&
+    if (!overridePos.has_value() && !PROTO::data->dndActive() && !SEAT->m_currentlyHeldButtons.empty() && Desktop::focusState()->surface() &&
         Desktop::focusState()->surface()->m_mapped && g_pSeatManager->m_state.pointerFocus && !m_hardInput) {
         foundSurface = g_pSeatManager->m_state.pointerFocus.lock();
 
@@ -397,9 +406,9 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         // TODO: make them.
         CInputPopup* foundPopup = m_relay.popupFromSurface(foundSurface);
         if (foundPopup) {
-            surfacePos             = foundPopup->globalBox().pos();
-            m_focusHeldByButtons   = true;
-            m_refocusHeldByButtons = refocus;
+            surfacePos                   = foundPopup->globalBox().pos();
+            SEAT->m_focusHeldByButtons   = true;
+            SEAT->m_refocusHeldByButtons = refocus;
         } else {
             auto HLSurface = Desktop::View::CWLSurface::fromResource(foundSurface);
 
@@ -727,24 +736,26 @@ void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) 
 
     PROTO::inputCapture->button(e.button, e.state);
 
+    const auto SEAT = seat();
+
     if (PROTO::inputCapture->isCaptured()) {
         Keybinds::mgr()->onMouseEvent(e, mouse, true);
         if (e.state == WL_POINTER_BUTTON_STATE_RELEASED)
-            std::erase_if(m_currentlyHeldButtons, [&](const auto& held) { return held.button == e.button && held.pointer.lock() == mouse; });
+            std::erase_if(SEAT->m_currentlyHeldButtons, [&](const auto& held) { return held.button == e.button && held.pointer.lock() == mouse; });
         return;
     }
 
     m_lastCursorMovement.reset();
 
     if (e.state == WL_POINTER_BUTTON_STATE_PRESSED) {
-        m_currentlyHeldButtons.emplace_back(e.button, mouse);
+        SEAT->m_currentlyHeldButtons.emplace_back(e.button, mouse);
     } else {
-        if (std::ranges::find_if(m_currentlyHeldButtons, [&](const auto& held) { return held.button == e.button && held.pointer.lock() == mouse; }) ==
-            m_currentlyHeldButtons.end()) {
+        if (std::ranges::find_if(SEAT->m_currentlyHeldButtons, [&](const auto& held) { return held.button == e.button && held.pointer.lock() == mouse; }) ==
+            SEAT->m_currentlyHeldButtons.end()) {
             Keybinds::mgr()->onMouseEvent(e, mouse);
             return;
         }
-        std::erase_if(m_currentlyHeldButtons, [&](const auto& held) { return held.button == e.button && held.pointer.lock() == mouse; });
+        std::erase_if(SEAT->m_currentlyHeldButtons, [&](const auto& held) { return held.button == e.button && held.pointer.lock() == mouse; });
     }
 
     switch (m_clickBehavior) {
@@ -753,14 +764,14 @@ void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) 
         default: break;
     }
 
-    if (m_focusHeldByButtons && m_currentlyHeldButtons.empty() && e.state == WL_POINTER_BUTTON_STATE_RELEASED) {
-        if (m_refocusHeldByButtons)
+    if (SEAT->m_focusHeldByButtons && SEAT->m_currentlyHeldButtons.empty() && e.state == WL_POINTER_BUTTON_STATE_RELEASED) {
+        if (SEAT->m_refocusHeldByButtons)
             refocus();
         else
             simulateMouseMovement();
 
-        m_focusHeldByButtons   = false;
-        m_refocusHeldByButtons = false;
+        SEAT->m_focusHeldByButtons   = false;
+        SEAT->m_refocusHeldByButtons = false;
     }
 
     g_pSeatManager->sendPointerFrame();
@@ -882,11 +893,11 @@ void CInputManager::processMouseDownNormal(const IPointer::SButtonEvent& e, SP<I
                 && (w && Desktop::focusState()->window() != w) /* window should change */) {
                 // a bit hacky
                 // if we only pressed one button, allow us to refocus. m_lCurrentlyHeldButtons.size() > 0 will stick the focus
-                if (m_currentlyHeldButtons.size() == 1) {
-                    const auto COPY = m_currentlyHeldButtons;
-                    m_currentlyHeldButtons.clear();
+                if (seat()->m_currentlyHeldButtons.size() == 1) {
+                    const auto COPY = seat()->m_currentlyHeldButtons;
+                    seat()->m_currentlyHeldButtons.clear();
                     refocus();
-                    m_currentlyHeldButtons = COPY;
+                    seat()->m_currentlyHeldButtons = COPY;
                 } else
                     refocus();
             }
@@ -1025,8 +1036,10 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e, SP<IPointer> pointer) {
         }
     }
 
-    double discrete = (e.deltaDiscrete != 0) ? (factor * e.deltaDiscrete / std::abs(e.deltaDiscrete)) : 0;
-    double delta    = e.delta * factor;
+    double     discrete = (e.deltaDiscrete != 0) ? (factor * e.deltaDiscrete / std::abs(e.deltaDiscrete)) : 0;
+    double     delta    = e.delta * factor;
+
+    const auto SEAT = seat();
 
     if (e.source == 0) {
         // if an application supports v120, it should ignore discrete anyways
@@ -1035,24 +1048,24 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e, SP<IPointer> pointer) {
             const int interval = factor != 0 ? std::round(120 * (1 / factor)) : 120;
 
             // reset the accumulator when timeout is reached or direction/axis has changed
-            if (std::signbit(e.deltaDiscrete) != m_scrollWheelState.lastEventSign || e.axis != m_scrollWheelState.lastEventAxis ||
-                e.timeMs - m_scrollWheelState.lastEventTime > 500 /* 500ms taken from libinput default timeout */) {
+            if (std::signbit(e.deltaDiscrete) != SEAT->m_scrollWheelState.lastEventSign || e.axis != SEAT->m_scrollWheelState.lastEventAxis ||
+                e.timeMs - SEAT->m_scrollWheelState.lastEventTime > 500 /* 500ms taken from libinput default timeout */) {
 
-                m_scrollWheelState.accumulatedScroll = 0;
+                SEAT->m_scrollWheelState.accumulatedScroll = 0;
                 // send 1 discrete on first event for responsiveness
                 discrete = std::copysign(1, e.deltaDiscrete);
             } else
                 discrete = 0;
 
-            for (int ac = m_scrollWheelState.accumulatedScroll; ac >= interval; ac -= interval) {
+            for (int ac = SEAT->m_scrollWheelState.accumulatedScroll; ac >= interval; ac -= interval) {
                 discrete += std::copysign(1, e.deltaDiscrete);
-                m_scrollWheelState.accumulatedScroll -= interval;
+                SEAT->m_scrollWheelState.accumulatedScroll -= interval;
             }
 
-            m_scrollWheelState.lastEventSign = std::signbit(e.deltaDiscrete);
-            m_scrollWheelState.lastEventAxis = e.axis;
-            m_scrollWheelState.lastEventTime = e.timeMs;
-            m_scrollWheelState.accumulatedScroll += std::abs(e.deltaDiscrete);
+            SEAT->m_scrollWheelState.lastEventSign = std::signbit(e.deltaDiscrete);
+            SEAT->m_scrollWheelState.lastEventAxis = e.axis;
+            SEAT->m_scrollWheelState.lastEventTime = e.timeMs;
+            SEAT->m_scrollWheelState.accumulatedScroll += std::abs(e.deltaDiscrete);
 
             delta = 15.0 * discrete * factor;
         }
@@ -1065,11 +1078,11 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e, SP<IPointer> pointer) {
 
     const bool deferPointerFrame = e.source == WL_POINTER_AXIS_SOURCE_FINGER || e.source == WL_POINTER_AXIS_SOURCE_CONTINUOUS;
     if (deferPointerFrame) {
-        m_pointerAxisFramePending = true;
+        SEAT->m_pointerAxisFramePending = true;
         return;
     }
 
-    m_pointerAxisFramePending = false;
+    SEAT->m_pointerAxisFramePending = false;
     g_pSeatManager->sendPointerFrame();
 }
 
@@ -1079,10 +1092,10 @@ void CInputManager::onPointerFrame() {
     if (PROTO::inputCapture->isCaptured())
         return;
 
-    if (!m_pointerAxisFramePending)
+    if (!seat()->m_pointerAxisFramePending)
         return;
 
-    m_pointerAxisFramePending = false;
+    seat()->m_pointerAxisFramePending = false;
     g_pSeatManager->sendPointerFrame();
 }
 
@@ -1091,7 +1104,7 @@ Vector2D CInputManager::getMouseCoordsInternal() {
 }
 
 void CInputManager::newKeyboard(SP<IKeyboard> keeb) {
-    const auto PNEWKEYBOARD = m_keyboards.emplace_back(keeb);
+    const auto PNEWKEYBOARD = seat()->m_keyboards.emplace_back(keeb);
 
     setupKeyboard(PNEWKEYBOARD);
 
@@ -1099,7 +1112,7 @@ void CInputManager::newKeyboard(SP<IKeyboard> keeb) {
 }
 
 void CInputManager::newKeyboard(SP<Aquamarine::IKeyboard> keyboard) {
-    const auto PNEWKEYBOARD = m_keyboards.emplace_back(CKeyboard::create(keyboard));
+    const auto PNEWKEYBOARD = seat()->m_keyboards.emplace_back(CKeyboard::create(keyboard));
 
     setupKeyboard(PNEWKEYBOARD);
 
@@ -1107,7 +1120,7 @@ void CInputManager::newKeyboard(SP<Aquamarine::IKeyboard> keyboard) {
 }
 
 void CInputManager::newVirtualKeyboard(SP<CVirtualKeyboardV1Resource> keyboard) {
-    const auto PNEWKEYBOARD = m_keyboards.emplace_back(CVirtualKeyboard::create(keyboard));
+    const auto PNEWKEYBOARD = seat()->m_keyboards.emplace_back(CVirtualKeyboard::create(keyboard));
 
     setupKeyboard(PNEWKEYBOARD);
 
@@ -1117,7 +1130,7 @@ void CInputManager::newVirtualKeyboard(SP<CVirtualKeyboardV1Resource> keyboard) 
 void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
     static auto PDPMS = CConfigValue<Config::INTEGER>("misc:key_press_enables_dpms");
 
-    m_hids.emplace_back(keeb);
+    seat()->m_hids.emplace_back(keeb);
 
     try {
         keeb->m_hlName = getNameForNewDevice(keeb->m_deviceName);
@@ -1181,12 +1194,12 @@ void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
     keeb->updateLEDs();
 
     // in case m_lastFocus was set without a keyboard
-    if (m_keyboards.size() == 1 && Desktop::focusState()->surface())
+    if (seat()->m_keyboards.size() == 1 && Desktop::focusState()->surface())
         g_pSeatManager->setKeyboardFocus(Desktop::focusState()->surface());
 }
 
 void CInputManager::setKeyboardLayout() {
-    for (auto const& k : m_keyboards)
+    for (auto const& k : seat()->m_keyboards)
         applyConfigToKeyboard(k);
 
     Keybinds::mgr()->updateXKBTranslationState();
@@ -1277,7 +1290,7 @@ void CInputManager::applyConfigToKeyboard(SP<IKeyboard> pKeyboard) {
 }
 
 void CInputManager::newVirtualMouse(SP<CVirtualPointerV1Resource> mouse) {
-    const auto PMOUSE = m_pointers.emplace_back(CVirtualPointer::create(mouse));
+    const auto PMOUSE = seat()->m_pointers.emplace_back(CVirtualPointer::create(mouse));
 
     setupMouse(PMOUSE);
 
@@ -1285,7 +1298,7 @@ void CInputManager::newVirtualMouse(SP<CVirtualPointerV1Resource> mouse) {
 }
 
 void CInputManager::newMouse(SP<IPointer> mouse) {
-    m_pointers.emplace_back(mouse);
+    seat()->m_pointers.emplace_back(mouse);
 
     setupMouse(mouse);
 
@@ -1293,7 +1306,7 @@ void CInputManager::newMouse(SP<IPointer> mouse) {
 }
 
 void CInputManager::newMouse(SP<Aquamarine::IPointer> mouse) {
-    const auto PMOUSE = m_pointers.emplace_back(CMouse::create(mouse));
+    const auto PMOUSE = seat()->m_pointers.emplace_back(CMouse::create(mouse));
 
     setupMouse(PMOUSE);
 
@@ -1301,7 +1314,7 @@ void CInputManager::newMouse(SP<Aquamarine::IPointer> mouse) {
 }
 
 void CInputManager::setupMouse(SP<IPointer> mauz) {
-    m_hids.emplace_back(mauz);
+    seat()->m_hids.emplace_back(mauz);
 
     try {
         mauz->m_hlName = getNameForNewDevice(mauz->m_deviceName);
@@ -1331,7 +1344,7 @@ void CInputManager::setupMouse(SP<IPointer> mauz) {
 }
 
 void CInputManager::setPointerConfigs() {
-    for (auto const& m : m_pointers) {
+    for (auto const& m : seat()->m_pointers) {
         auto       devname = m->m_hlName;
 
         const auto HASCONFIG = Config::mgr()->deviceConfigExists(devname);
@@ -1511,12 +1524,15 @@ void CInputManager::setPointerConfigs() {
 }
 
 static void removeFromHIDs(WP<IHID> hid) {
-    std::erase_if(g_pInputManager->m_hids, [hid](const auto& e) { return e.expired() || e == hid; });
+    for (auto const& s : g_pSeatManager->seats()) {
+        std::erase_if(s->m_hids, [hid](const auto& e) { return e.expired() || e == hid; });
+    }
     g_pInputManager->updateCapabilities();
 }
 
 bool CInputManager::anyHidHasCap(eHIDCapabilityType type) {
-    return std::ranges::any_of(m_hids, [&type](const auto& hid) { return hid && (hid->getCapabilities() & type) != 0; });
+    return std::ranges::any_of(g_pSeatManager->seats(),
+                               [&type](const auto& s) { return std::ranges::any_of(s->m_hids, [&type](const auto& hid) { return hid && (hid->getCapabilities() & type) != 0; }); });
 }
 
 void CInputManager::destroyKeyboard(SP<IKeyboard> pKeyboard) {
@@ -1524,11 +1540,11 @@ void CInputManager::destroyKeyboard(SP<IKeyboard> pKeyboard) {
 
     Keybinds::mgr()->onDeviceRemoved(pKeyboard);
     g_pSeatManager->m_keyboardEventHandlers.onKeyboardRemoved(pKeyboard);
-    std::erase_if(m_keyboards, [pKeyboard](const auto& other) { return other == pKeyboard; });
+    std::erase_if(seat()->m_keyboards, [pKeyboard](const auto& other) { return other == pKeyboard; });
 
-    if (!m_keyboards.empty()) {
+    if (!seat()->m_keyboards.empty()) {
         bool found = false;
-        for (auto const& k : m_keyboards | std::views::reverse) {
+        for (auto const& k : seat()->m_keyboards | std::views::reverse) {
             if (!k)
                 continue;
 
@@ -1549,18 +1565,19 @@ void CInputManager::destroyPointer(SP<IPointer> mouse) {
     LOG(Log::DEBUG, "Pointer at {:x} removed", rc<uintptr_t>(mouse.get()));
 
     Keybinds::mgr()->onDeviceRemoved(mouse);
-    for (auto it = m_currentlyHeldButtons.begin(); it != m_currentlyHeldButtons.end();) {
+    const auto SEAT = seat();
+    for (auto it = SEAT->m_currentlyHeldButtons.begin(); it != SEAT->m_currentlyHeldButtons.end();) {
         if (it->pointer.lock() != mouse) {
             ++it;
             continue;
         }
 
         g_pSeatManager->sendPointerButton(Time::millis(Time::steadyNow()), it->button, WL_POINTER_BUTTON_STATE_RELEASED);
-        it = m_currentlyHeldButtons.erase(it);
+        it = SEAT->m_currentlyHeldButtons.erase(it);
     }
-    std::erase_if(m_pointers, [mouse](const auto& other) { return other == mouse; });
+    std::erase_if(SEAT->m_pointers, [mouse](const auto& other) { return other == mouse; });
 
-    g_pSeatManager->setMouse(!m_pointers.empty() ? m_pointers.front() : nullptr);
+    g_pSeatManager->setMouse(!SEAT->m_pointers.empty() ? SEAT->m_pointers.front() : nullptr);
 
     if (!g_pSeatManager->m_mouse.expired())
         unconstrainMouse();
@@ -1571,7 +1588,7 @@ void CInputManager::destroyPointer(SP<IPointer> mouse) {
 void CInputManager::destroyTouchDevice(SP<ITouch> touch) {
     LOG(Log::DEBUG, "Touch device at {:x} removed", rc<uintptr_t>(touch.get()));
 
-    std::erase_if(m_touches, [touch](const auto& other) { return other == touch; });
+    std::erase_if(seat()->m_touches, [touch](const auto& other) { return other == touch; });
 
     removeFromHIDs(touch);
 }
@@ -1579,7 +1596,7 @@ void CInputManager::destroyTouchDevice(SP<ITouch> touch) {
 void CInputManager::destroyTablet(SP<CTablet> tablet) {
     LOG(Log::DEBUG, "Tablet device at {:x} removed", rc<uintptr_t>(tablet.get()));
 
-    std::erase_if(m_tablets, [tablet](const auto& other) { return other == tablet; });
+    std::erase_if(seat()->m_tablets, [tablet](const auto& other) { return other == tablet; });
 
     removeFromHIDs(tablet);
 }
@@ -1587,7 +1604,7 @@ void CInputManager::destroyTablet(SP<CTablet> tablet) {
 void CInputManager::destroyTabletTool(SP<CTabletTool> tool) {
     LOG(Log::DEBUG, "Tablet tool at {:x} removed", rc<uintptr_t>(tool.get()));
 
-    std::erase_if(m_tabletTools, [tool](const auto& other) { return other == tool; });
+    std::erase_if(seat()->m_tabletTools, [tool](const auto& other) { return other == tool; });
 
     removeFromHIDs(tool);
 }
@@ -1595,7 +1612,7 @@ void CInputManager::destroyTabletTool(SP<CTabletTool> tool) {
 void CInputManager::destroyTabletPad(SP<CTabletPad> pad) {
     LOG(Log::DEBUG, "Tablet pad at {:x} removed", rc<uintptr_t>(pad.get()));
 
-    std::erase_if(m_tabletPads, [pad](const auto& other) { return other == pad; });
+    std::erase_if(seat()->m_tabletPads, [pad](const auto& other) { return other == pad; });
 
     removeFromHIDs(pad);
 }
@@ -1609,7 +1626,7 @@ void CInputManager::updateKeyboardsLeds(SP<IKeyboard> pKeyboard) {
     if (!leds.has_value())
         return;
 
-    for (auto const& k : m_keyboards) {
+    for (auto const& k : seat()->m_keyboards) {
         k->updateLEDs(leds.value());
     }
 }
@@ -1728,7 +1745,8 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
         IME->setKeyboard(pKeyboard);
         IME->sendKey(event.timeMs, event.keycode, state);
     } else {
-        const auto CONTAINS = std::ranges::contains(m_pressed, event.keycode);
+        const auto SEAT     = seat();
+        const auto CONTAINS = std::ranges::contains(SEAT->m_pressed, event.keycode);
 
         if (CONTAINS && pressed)
             return;
@@ -1736,9 +1754,9 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
             return;
 
         if (CONTAINS)
-            std::erase(m_pressed, event.keycode);
+            std::erase(SEAT->m_pressed, event.keycode);
         else
-            m_pressed.emplace_back(event.keycode);
+            SEAT->m_pressed.emplace_back(event.keycode);
 
         g_pSeatManager->setKeyboard(pKeyboard);
         g_pSeatManager->sendKeyboardKey(event.timeMs, event.keycode, state);
@@ -1764,7 +1782,7 @@ void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
         PROTO::inputCapture->modifiers(MODS.depressed, MODS.latched, MODS.locked, MODS.group);
 
         if (PROTO::inputCapture->isCaptured()) {
-            m_lastMods = shareModsFromAllKBs(DEPRESSED_MODS_HL);
+            seat()->m_lastMods = shareModsFromAllKBs(DEPRESSED_MODS_HL);
             return;
         }
     }
@@ -1774,7 +1792,7 @@ void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
     if (USEIME || !HASIME) {
         const auto ALLMODS = shareModsFromAllKBs(DEPRESSED_MODS_HL);
         MODS.depressed |= hyprlandModsToXkb(pKeyboard, ALLMODS);
-        m_lastMods = ALLMODS;
+        seat()->m_lastMods = ALLMODS;
     }
 
     if (USEIME) {
@@ -1899,29 +1917,35 @@ CPointerConstraintController& CInputManager::pointerConstraints() {
 }
 
 bool CInputManager::hasHeldButtons() {
-    return !m_currentlyHeldButtons.empty();
+    return !seat()->m_currentlyHeldButtons.empty();
 }
 
 void CInputManager::updateCapabilities() {
     uint32_t caps = 0;
 
-    for (auto const& h : m_hids) {
-        if (h.expired())
-            continue;
+    for (auto const& s : g_pSeatManager->seats()) {
+        uint32_t seatCaps = 0;
 
-        caps |= h->getCapabilities();
+        for (auto const& h : s->m_hids) {
+            if (h.expired())
+                continue;
+
+            seatCaps |= h->getCapabilities();
+        }
+
+        s->m_capabilities = seatCaps;
+        caps |= seatCaps;
     }
 
     g_pSeatManager->updateCapabilities(caps);
-    m_capabilities = caps;
 }
 
 const std::vector<uint32_t>& CInputManager::getKeysFromAllKBs() {
-    return m_pressed;
+    return seat()->m_pressed;
 }
 
 Input::ModifierMask CInputManager::getModsFromAllKBs() {
-    return m_lastMods;
+    return seat()->m_lastMods;
 }
 
 bool CInputManager::shareKeyFromAllKBs(uint32_t key, bool pressed) {
@@ -1930,7 +1954,7 @@ bool CInputManager::shareKeyFromAllKBs(uint32_t key, bool pressed) {
     if (finalState)
         return finalState;
 
-    for (auto const& kb : m_keyboards) {
+    for (auto const& kb : seat()->m_keyboards) {
         if (!kb->shareStates())
             continue;
 
@@ -1951,7 +1975,7 @@ bool CInputManager::shareKeyFromAllKBs(uint32_t key, bool pressed) {
 Input::ModifierMask CInputManager::shareModsFromAllKBs(Input::ModifierMask mask) {
     Input::ModifierMask finalMask = mask;
 
-    for (auto const& kb : m_keyboards) {
+    for (auto const& kb : seat()->m_keyboards) {
         if (!kb->shareStates())
             continue;
 
@@ -1969,7 +1993,7 @@ Input::ModifierMask CInputManager::shareModsFromAllKBs(Input::ModifierMask mask)
 
 void CInputManager::disableAllKeyboards(bool virt) {
 
-    for (auto const& k : m_keyboards) {
+    for (auto const& k : seat()->m_keyboards) {
         if (k->isVirtual() != virt)
             continue;
 
@@ -1978,8 +2002,8 @@ void CInputManager::disableAllKeyboards(bool virt) {
 }
 
 void CInputManager::newTouchDevice(SP<Aquamarine::ITouch> pDevice) {
-    const auto PNEWDEV = m_touches.emplace_back(CTouchDevice::create(pDevice));
-    m_hids.emplace_back(PNEWDEV);
+    const auto PNEWDEV = seat()->m_touches.emplace_back(CTouchDevice::create(pDevice));
+    seat()->m_hids.emplace_back(PNEWDEV);
 
     try {
         PNEWDEV->m_hlName = getNameForNewDevice(PNEWDEV->m_deviceName);
@@ -2046,15 +2070,14 @@ void CInputManager::setTouchDeviceConfigs(SP<ITouch> dev) {
         return;
     }
 
-    for (auto const& m : m_touches) {
+    for (auto const& m : seat()->m_touches) {
         setConfig(m);
     }
 }
 
 void CInputManager::setTabletConfigs() {
-    for (auto const& t : m_tablets) {
+    for (auto const& t : seat()->m_tablets) {
         t->m_enabled = Config::mgr()->getDeviceInt(t->m_hlName, "enabled", "input:tablet:enabled") != 0;
-
         if (t->aq()->getLibinputHandle()) {
             const auto NAME        = t->m_hlName;
             const auto LIBINPUTDEV = t->aq()->getLibinputHandle();
@@ -2102,7 +2125,7 @@ void CInputManager::setTabletConfigs() {
 }
 
 void CInputManager::setTabletToolConfigs() {
-    for (auto const& t : m_tabletTools) {
+    for (auto const& t : seat()->m_tabletTools) {
         if (t->aq()->getLibinputTool()) {
             const auto NAME         = t->m_hlName;
             const auto LIBINPUTTOOL = t->aq()->getLibinputTool();
@@ -2163,14 +2186,22 @@ std::string CInputManager::getNameForNewDevice(std::string internalName) {
         return std::format("{}{}", proposedNewName.empty() ? "unknown-device" : proposedNewName, dupeno == 0 ? std::string{} : std::format("-{}", dupeno));
     };
 
-    while (std::ranges::find_if(m_hids, [&](const auto& other) { return other->m_hlName == makeNewName(); }) != m_hids.end())
+    auto nameTaken = [&]() {
+        for (auto const& s : g_pSeatManager->seats()) {
+            if (std::ranges::find_if(s->m_hids, [&](const auto& other) { return other->m_hlName == makeNewName(); }) != s->m_hids.end())
+                return true;
+        }
+        return false;
+    };
+
+    while (nameTaken())
         dupeno++;
 
     return makeNewName();
 }
 
 void CInputManager::releaseAllMouseButtons() {
-    const auto buttonsCopy = m_currentlyHeldButtons;
+    const auto buttonsCopy = seat()->m_currentlyHeldButtons;
 
     if (PROTO::data->dndActive())
         return;
@@ -2179,7 +2210,7 @@ void CInputManager::releaseAllMouseButtons() {
         g_pSeatManager->sendPointerButton(Time::millis(Time::steadyNow()), mb.button, WL_POINTER_BUTTON_STATE_RELEASED);
     }
 
-    m_currentlyHeldButtons.clear();
+    seat()->m_currentlyHeldButtons.clear();
 }
 
 void CInputManager::setCursorIconOnBorder(PHLWINDOW w) {
@@ -2203,7 +2234,7 @@ void CInputManager::setCursorIconOnBorder(PHLWINDOW w) {
 
     if (w->hasPopupAt(mouseCoords))
         direction = BORDERICON_NONE;
-    else if (!boxFullGrabInput.containsPoint(mouseCoords) || (!m_currentlyHeldButtons.empty() && !g_layoutManager->dragController()->target()))
+    else if (!boxFullGrabInput.containsPoint(mouseCoords) || (!seat()->m_currentlyHeldButtons.empty() && !g_layoutManager->dragController()->target()))
         direction = BORDERICON_NONE;
     else {
 
