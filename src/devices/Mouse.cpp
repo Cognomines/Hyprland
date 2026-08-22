@@ -137,3 +137,10 @@ bool CMouse::isVirtual() {
 SP<Aquamarine::IPointer> CMouse::aq() {
     return m_mouse.lock();
 }
+
+libinput_device* CMouse::libinputHandle() const {
+    const auto MOUSE = m_mouse.lock();
+    if (!MOUSE)
+        return nullptr;
+    return MOUSE->getLibinputHandle();
+}

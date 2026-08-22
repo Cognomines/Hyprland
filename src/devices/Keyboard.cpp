@@ -19,6 +19,13 @@ SP<Aquamarine::IKeyboard> CKeyboard::aq() {
     return m_keyboard.lock();
 }
 
+libinput_device* CKeyboard::libinputHandle() const {
+    const auto KEEB = m_keyboard.lock();
+    if (!KEEB)
+        return nullptr;
+    return KEEB->getLibinputHandle();
+}
+
 CKeyboard::CKeyboard(SP<Aquamarine::IKeyboard> keeb) : m_keyboard(keeb) {
     if (!keeb)
         return;

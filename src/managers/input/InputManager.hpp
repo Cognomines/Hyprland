@@ -166,6 +166,14 @@ class CInputManager {
     // this is always the default seat and holds all devices.
     SP<CSeat> seat();
 
+    // resolves the owner seat for a device and stores it in dev->m_seat.
+    // order: hl.seat{} config lists, then libinput logical seat name
+    // (udev WL_SEAT tag), then the default seat.
+    SP<CSeat> assignDeviceToSeat(IHID* dev);
+
+    // re-runs seat assignment for all known devices after a config reload.
+    void refreshSeatAssignments();
+
     // Switches
     std::list<SSwitchDevice> m_switches;
 

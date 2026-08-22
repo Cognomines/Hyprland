@@ -8,6 +8,7 @@ class CTouchDevice : public ITouch {
 
     virtual bool                   isVirtual();
     virtual SP<Aquamarine::ITouch> aq();
+    virtual libinput_device*       libinputHandle() const override;
 
   private:
     CTouchDevice(SP<Aquamarine::ITouch> touch);
