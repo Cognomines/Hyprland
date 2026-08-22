@@ -4,6 +4,7 @@
 #include "../../desktop/view/window/WindowPresentation.hpp"
 #include "../../desktop/view/window/WindowSwallowController.hpp"
 #include "../../output/Monitor.hpp"
+#include "../../pointer/PointerManager.hpp"
 
 #include <algorithm>
 #include <array>
@@ -738,8 +739,8 @@ static std::string configErrorsRequest(eHyprCtlOutputFormat format, std::string 
 }
 
 static std::string seatIdentityLine(IHID* dev) {
-    const auto SEAT = dev->m_seat.lock();
-    auto&      id   = dev->m_identity;
+    const auto  SEAT = dev->m_seat.lock();
+    auto&       id   = dev->m_identity;
 
     std::string line = std::format("\t\t\tseat: {}", SEAT ? SEAT->name() : DEFAULT_SEAT_NAME);
 
@@ -932,6 +933,15 @@ static std::string devicesRequest(eHyprCtlOutputFormat format, std::string reque
 
         for (auto const& d : g_pInputManager->m_switches) {
             result += std::format("\tSwitch Device at {:x}:\n\t\t{}\n", rc<uintptr_t>(&d), d.pDevice ? d.pDevice->getName() : "");
+        }
+
+        // P4-lite: per-seat cursor positions (default seat's lives in the pointer manager)
+        result += "\n\nSeat cursors:\n";
+        result += std::format("\t{}: ({:.1f}, {:.1f})\n", g_pInputManager->seat()->name(), Pointer::mgr()->position().x, Pointer::mgr()->position().y);
+        for (auto const& s : g_pSeatManager->seats()) {
+            if (s->isDefault())
+                continue;
+            result += std::format("\t{}: ({:.1f}, {:.1f}){}\n", s->name(), s->m_cursorPos.x, s->m_cursorPos.y, s->hasLiveDevices() ? "" : " (no devices)");
         }
     }
 

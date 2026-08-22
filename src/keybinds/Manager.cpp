@@ -13,6 +13,8 @@
 #include "../managers/SessionLockManager.hpp"
 #include "../managers/eventLoop/EventLoopManager.hpp"
 #include "../managers/input/InputManager.hpp"
+#include "../managers/input/SeatContext.hpp"
+#include "../managers/input/Seat.hpp"
 #include "../protocols/Hotkey.hpp"
 #include "../protocols/InputCapture.hpp"
 #include "../protocols/ShortcutsInhibit.hpp"
@@ -213,7 +215,7 @@ bool CKeybindManager::onKeyEvent(std::any event, SP<IKeyboard> keyboard) {
     if (!PROTO::inputCapture->isCaptured() && handleInternalKeybinds(INTERNAL))
         return false;
 
-    const auto MODIFIERS = g_pInputManager->getModsFromAllKBs();
+    const auto MODIFIERS = g_pInputManager->getModsFromAllKBs(keyboard.get());
     if (PROTO::hotkey && PROTO::hotkey->onKey(KEYSYM, MODIFIERS, KEYCODE, KEY_EVENT.state == WL_KEYBOARD_KEY_STATE_PRESSED, KEY_EVENT.timeMs))
         return false;
 
@@ -333,7 +335,7 @@ bool CKeybindManager::onAxisEvent(const IPointer::SAxisEvent& event, SP<IPointer
         {
             .heldKeys     = m_inputState.heldKeys(),
             .trigger      = KEY,
-            .modifiersNow = sc<ModifierMask>(g_pInputManager->getModsFromAllKBs()),
+            .modifiersNow = sc<ModifierMask>(g_pInputManager->getModsFromAllKBs(pointer.get())),
             .pressed      = true,
             .device       = pointer,
             .submap       = std::string{currentSubmap()},
@@ -344,7 +346,7 @@ bool CKeybindManager::onAxisEvent(const IPointer::SAxisEvent& event, SP<IPointer
 }
 
 bool CKeybindManager::onMouseEvent(const IPointer::SButtonEvent& event, SP<IPointer> pointer, bool captured) {
-    const auto MODIFIERS = g_pInputManager->getModsFromAllKBs();
+    const auto MODIFIERS = g_pInputManager->getModsFromAllKBs(pointer.get());
     const auto KEY       = SResolvedKey{.event = "mouse:" + std::to_string(event.button)};
 
     Config::Actions::state()->m_lastMouseCode = event.button;
@@ -586,9 +588,17 @@ SBindResult CKeybindManager::invokeBind(const PBind& bind, bool pressed, SPresse
     const auto INPUT_KEY    = pressedInput ? std::optional{pressedInput->key} : std::nullopt;
     const auto INPUT_DEVICE = pressedInput ? pressedInput->device.lock() : nullptr;
 
-    auto&      actionState      = *Config::Actions::state();
-    const auto PREVIOUS_PRESSED = actionState.m_passPressed;
-    const bool OUTERMOST        = actionState.m_bindInvocationDepth++ == 0;
+    // dispatchers (incl. submap switches) run in the triggering device's seat;
+    // recursion without a device inherits the outer scope
+    const Input::SScopedAmbientSeat SEAT_SCOPE{[&] {
+        if (INPUT_DEVICE && !INPUT_DEVICE->m_seat.expired())
+            return INPUT_DEVICE->m_seat.lock();
+        return Input::ambientSeat();
+    }()};
+
+    auto&                           actionState      = *Config::Actions::state();
+    const auto                      PREVIOUS_PRESSED = actionState.m_passPressed;
+    const bool                      OUTERMOST        = actionState.m_bindInvocationDepth++ == 0;
     if (OUTERMOST)
         actionState.m_requestBindRelease = false;
     actionState.m_passPressed = sc<int>(pressed);
@@ -816,7 +826,7 @@ const CInputState& CKeybindManager::inputState() const {
 }
 
 std::string_view CKeybindManager::currentSubmap() const {
-    return Config::Actions::state()->m_currentSubmap;
+    return Config::Actions::currentSubmapFor(Input::ambientSeat()->name());
 }
 
 void CKeybindManager::updateXKBTranslationState() {

@@ -3,6 +3,8 @@
 #include "../../../event/EventBus.hpp"
 #include "../../../Compositor.hpp"
 #include "../../../managers/input/InputManager.hpp"
+#include "../../../managers/input/SeatContext.hpp"
+#include "../../../managers/input/PidSeatRegistry.hpp"
 #include "../../../desktop/rule/windowRule/WindowRule.hpp"
 #include "../../../desktop/rule/Engine.hpp"
 #include "../../../desktop/state/FocusState.hpp"
@@ -208,6 +210,9 @@ std::optional<uint64_t> CExecutor::spawnRawProc(const std::string& args, PHLWORK
     // run in parent
 
     Log::logger->log(Log::DEBUG, "[executor] Process created with pid {}", child);
+
+    // remember which logical seat spawned this process, for wl_seat bind resolution
+    Input::pidSeatRegistry()->associate(child, Input::ambientSeat()->name());
 
     return child;
 }

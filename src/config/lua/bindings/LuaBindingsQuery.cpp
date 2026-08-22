@@ -13,6 +13,7 @@
 #include "../../../desktop/view/LayerSurface.hpp"
 #include "../../../desktop/view/window/Window.hpp"
 #include "../../../managers/input/InputManager.hpp"
+#include "../../../managers/input/SeatContext.hpp"
 #include "../../../state/MonitorState.hpp"
 #include "../../../state/WorkspaceState.hpp"
 
@@ -408,7 +409,7 @@ static int hlGetWorkspaceWindows(lua_State* L) {
 }
 
 static int hlGetCurrentSubmap(lua_State* L) {
-    lua_pushstring(L, Config::Actions::state()->m_currentSubmap.c_str());
+    lua_pushstring(L, Config::Actions::currentSubmapFor(Input::ambientSeat()->name()).c_str());
     return 1;
 }
 

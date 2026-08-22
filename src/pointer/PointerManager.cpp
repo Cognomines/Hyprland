@@ -378,8 +378,43 @@ void CPointerManager::onCursorMoved() {
         updateCursorBackend();
 }
 
+SP<CSeat> CPointerManager::seatForDevice(SP<IHID> dev) {
+    if (dev) {
+        if (const auto SEAT = dev->m_seat.lock(); SEAT)
+            return SEAT;
+    }
+
+    return g_pSeatManager->defaultSeat();
+}
+
+Vector2D& CPointerManager::posRefFor(SP<CSeat> seat) {
+    return seat && !seat->isDefault() ? seat->m_cursorPos : m_pointerPos;
+}
+
+bool CPointerManager::hasForeignCursors() const {
+    for (auto const& s : g_pSeatManager->seats()) {
+        if (!s->isDefault() && s->m_cursorActive && s->hasLiveDevices())
+            return true;
+    }
+    return false;
+}
+
+void CPointerManager::damageForeignCursor(SP<CSeat> seat, const Vector2D& oldPos) {
+    // lite path: no per-seat damage tracking yet; force repaint of every
+    // monitor under the old or new position so the cursor follows cleanly
+    for (auto const& m : State::monitorState()->monitors()) {
+        if (m->logicalBox().containsPoint(oldPos) || m->logicalBox().containsPoint(seat->m_cursorPos))
+            m->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_MOVE);
+    }
+}
+
 bool CPointerManager::attemptHardwareCursor(SP<CPointerManager::SMonitorPointerState> state) {
     auto output = state->monitor->m_output;
+
+    // P4-lite: hardware plane can only show one cursor; fall back to software
+    // rendering while any non-default seat has an active cursor
+    if (hasForeignCursors())
+        return false;
 
     if (!(output->getBackend()->capabilities() & Aquamarine::IBackendImplementation::eBackendCapabilities::AQ_BACKEND_CAPABILITY_POINTER))
         return false;
@@ -653,7 +688,8 @@ void CPointerManager::renderSoftwareCursorsFor(PHLMONITOR pMonitor, const Time::
 
     auto state = stateFor(pMonitor);
 
-    if (!state->hardwareFailed && state->softwareLocks == 0 && !screencopy) {
+    // P4-lite: foreign cursors force software rendering for this output
+    if (!state->hardwareFailed && state->softwareLocks == 0 && !screencopy && !hasForeignCursors()) {
         if (m_currentCursorImage.surface)
             m_currentCursorImage.surface->resource()->frame(now);
         return;
@@ -691,6 +727,27 @@ void CPointerManager::renderSoftwareCursorsFor(PHLMONITOR pMonitor, const Time::
     data.box = box.round();
 
     g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(data)));
+
+    // P4-lite: draw every other active seat's cursor with the same image
+    for (auto const& s : g_pSeatManager->seats()) {
+        if (s->isDefault() || !s->m_cursorActive || !s->hasLiveDevices())
+            continue;
+
+        auto sbox = CBox{s->m_cursorPos, m_currentCursorImage.size / m_currentCursorImage.scale}.translate(-m_currentCursorImage.hotspot - pMonitor->m_position);
+
+        if (sbox.intersection(CBox{{}, {pMonitor->m_size}}).empty())
+            continue;
+
+        sbox.scale(pMonitor->m_scale);
+        sbox.x = std::round(sbox.x);
+        sbox.y = std::round(sbox.y);
+
+        CTexPassElement::SRenderData sdata;
+        sdata.tex = texture;
+        sdata.box = sbox.round();
+
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(sdata)));
+    }
 
     // to erase the leftover in updateCursorBackend()
     if (!screencopy) {
@@ -825,20 +882,43 @@ void CPointerManager::damageIfSoftware() {
     }
 }
 
-void CPointerManager::warpTo(const Vector2D& logical) {
+void CPointerManager::warpTo(const Vector2D& logical, SP<IHID> dev) {
+    const auto SEAT = seatForDevice(dev);
+    auto&      POS  = posRefFor(SEAT);
+
+    const auto OLD_POS = POS;
+
     damageIfSoftware();
 
-    m_pointerPos = closestValid(logical);
+    POS                  = closestValid(logical);
+    SEAT->m_cursorActive = true;
 
-    if (!g_pInputManager->isLocked()) {
-        recheckEnteredOutputs();
-        onCursorMoved();
-    }
+    if (SEAT->isDefault()) {
+        if (!g_pInputManager->isLocked()) {
+            recheckEnteredOutputs();
+            onCursorMoved();
+        }
+    } else
+        damageForeignCursor(SEAT, OLD_POS);
 
     damageIfSoftware();
 }
 
-void CPointerManager::move(const Vector2D& deltaLogical) {
+void CPointerManager::move(const Vector2D& deltaLogical, SP<IHID> dev) {
+    const auto SEAT = seatForDevice(dev);
+
+    if (!SEAT->isDefault()) {
+        // lite path: independent position, no input-capture interplay yet
+        auto&      POS    = posRefFor(SEAT);
+        const auto OLDPOS = POS;
+        const auto NEWPOS = POS + Vector2D{std::isnan(deltaLogical.x) ? 0.0 : deltaLogical.x, std::isnan(deltaLogical.y) ? 0.0 : deltaLogical.y};
+
+        POS                  = closestValid(NEWPOS);
+        SEAT->m_cursorActive = true;
+        damageForeignCursor(SEAT, OLDPOS);
+        return;
+    }
+
     const auto oldPos = m_pointerPos;
     auto       newPos = oldPos + Vector2D{std::isnan(deltaLogical.x) ? 0.0 : deltaLogical.x, std::isnan(deltaLogical.y) ? 0.0 : deltaLogical.y};
 
@@ -921,14 +1001,27 @@ void CPointerManager::warpAbsolute(Vector2D abs, SP<IHID> dev) {
 
     damageIfSoftware();
 
-    if (std::isnan(abs.x) || std::isnan(abs.y)) {
-        m_pointerPos.x = std::isnan(abs.x) ? m_pointerPos.x : mappedArea.x + mappedArea.w * abs.x;
-        m_pointerPos.y = std::isnan(abs.y) ? m_pointerPos.y : mappedArea.y + mappedArea.h * abs.y;
-    } else
-        m_pointerPos = mappedArea.pos() + mappedArea.size() * abs;
+    const auto SEAT = seatForDevice(dev);
+    auto&      POS  = posRefFor(SEAT);
 
-    onCursorMoved();
-    recheckEnteredOutputs();
+    if (std::isnan(abs.x) || std::isnan(abs.y)) {
+        POS.x = std::isnan(abs.x) ? POS.x : mappedArea.x + mappedArea.w * abs.x;
+        POS.y = std::isnan(abs.y) ? POS.y : mappedArea.y + mappedArea.h * abs.y;
+    } else
+        POS = mappedArea.pos() + mappedArea.size() * abs;
+
+    SEAT->m_cursorActive = true;
+
+    if (SEAT->isDefault()) {
+        onCursorMoved();
+        recheckEnteredOutputs();
+    } else {
+        // lite path: no enter/output tracking yet, just repaint the monitors under it
+        for (auto const& m : State::monitorState()->monitors()) {
+            if (m->logicalBox().containsPoint(POS))
+                m->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_MOVE);
+        }
+    }
 
     damageIfSoftware();
 }

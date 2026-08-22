@@ -17,6 +17,7 @@
 #include "../../../ipc/s2/S2.hpp"
 #include "../../../keybinds/Manager.hpp"
 #include "../../../managers/input/InputManager.hpp"
+#include "../../../managers/input/SeatContext.hpp"
 #include "../../../managers/fullscreen/FullscreenController.hpp"
 #include "../../../layout/LayoutManager.hpp"
 #include "../../../layout/space/Space.hpp"
@@ -47,6 +48,17 @@ using namespace Config::Actions;
 UP<CActionState>& Actions::state() {
     static UP<CActionState> p = makeUnique<CActionState>();
     return p;
+}
+
+const std::string& Actions::currentSubmapFor(const std::string& seatName) {
+    static const std::string EMPTY;
+    const auto&              submaps = state()->m_submaps;
+    const auto               IT      = submaps.find(seatName);
+    return IT == submaps.end() ? EMPTY : IT->second;
+}
+
+void Actions::setCurrentSubmapFor(const std::string& seatName, const std::string& submap) {
+    state()->m_submaps.insert_or_assign(seatName, submap);
 }
 
 static PHLWINDOW xtract(std::optional<PHLWINDOW> window) {
@@ -1696,15 +1708,18 @@ ActionResult Actions::mouse(const std::string& action) {
 }
 
 ActionResult Actions::setSubmap(const std::string& submap) {
+    // executed from a bind dispatcher: the ambient seat is the triggering seat
+    const auto SEAT = Input::ambientSeat();
+
     if (submap == "reset" || submap.empty()) {
-        Config::Actions::state()->m_currentSubmap = "";
+        Actions::setCurrentSubmapFor(SEAT->name(), "");
         IPC::Socket2::sock()->postEvent({.event = "submap", .data = ""});
         Event::bus()->m_events.keybinds.submap.emit(std::string(""));
         return {};
     }
 
     if (Keybinds::mgr()->registry().hasSubmap(submap)) {
-        Config::Actions::state()->m_currentSubmap = submap;
+        Actions::setCurrentSubmapFor(SEAT->name(), submap);
         IPC::Socket2::sock()->postEvent({.event = "submap", .data = submap});
         Event::bus()->m_events.keybinds.submap.emit(submap);
         return {};

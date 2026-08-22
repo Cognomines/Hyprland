@@ -1,4 +1,5 @@
 #include "InputManager.hpp"
+#include "SeatContext.hpp"
 #include "../../desktop/view/window/WindowPresentation.hpp"
 #include "../../Compositor.hpp"
 #include <aquamarine/output/Output.hpp>
@@ -117,7 +118,7 @@ CInputManager::CInputManager() {
 }
 
 SP<CSeat> CInputManager::seat() {
-    return g_pSeatManager->defaultSeat();
+    return Input::ambientSeat();
 }
 
 CInputManager::~CInputManager() {
@@ -164,7 +165,7 @@ void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
     // dragged. a pointer-locked game would otherwise pan its camera from the drag itself.
     if (!g_layoutManager->dragController()->target())
         PROTO::relativePointer->sendRelativeMotion(sc<uint64_t>(e.timeMs) * 1000, delta, unaccel);
-    Pointer::mgr()->move(DELTA);
+    Pointer::mgr()->move(DELTA, e.device);
 
     if (PROTO::inputCapture->isCaptured())
         return;
@@ -1323,7 +1324,7 @@ void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
     keeb->updateLEDs();
 
     // in case m_lastFocus was set without a keyboard
-    if (seat()->m_keyboards.size() == 1 && Desktop::focusState()->surface())
+    if (ownerSeatFor(keeb.get())->m_keyboards.size() == 1 && Desktop::focusState()->surface())
         g_pSeatManager->setKeyboardFocus(Desktop::focusState()->surface());
 }
 
@@ -1757,7 +1758,7 @@ void CInputManager::updateKeyboardsLeds(SP<IKeyboard> pKeyboard) {
     if (!leds.has_value())
         return;
 
-    for (auto const& k : seat()->m_keyboards) {
+    for (auto const& k : ownerSeatFor(pKeyboard.get())->m_keyboards) {
         k->updateLEDs(leds.value());
     }
 }
@@ -1854,7 +1855,7 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
         // use merged keys states when sending to ime or when sending to seat with no ime
         // if passing from ime, send keys directly without merging
         if (USEIME || !HASIME) {
-            const auto ANYPRESSED = shareKeyFromAllKBs(event.keycode, pressed);
+            const auto ANYPRESSED = shareKeyFromAllKBs(pKeyboard, event.keycode, pressed);
 
             // do not turn released event into pressed event (when one keyboard has a key released but some
             // other keyboard still has the key pressed)
@@ -1871,7 +1872,7 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
             IME->setKeyboard(pKeyboard);
             IME->sendKey(event.timeMs, event.keycode, state);
         } else {
-            const auto SEAT     = seat();
+            const auto SEAT     = ownerSeatFor(pKeyboard.get());
             const auto CONTAINS = std::ranges::contains(SEAT->m_pressed, event.keycode);
 
             if (CONTAINS && pressed)
@@ -1904,12 +1905,13 @@ void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
     const bool USEIME            = HASIME && !DISALLOWACTION;
     auto       MODS              = pKeyboard->m_modifiersState;
     const auto DEPRESSED_MODS_HL = xkbModsToHyprland(pKeyboard, MODS.depressed);
+    const auto SEAT              = ownerSeatFor(pKeyboard.get());
 
     if (*PSENDMOD) {
         PROTO::inputCapture->modifiers(MODS.depressed, MODS.latched, MODS.locked, MODS.group);
 
         if (PROTO::inputCapture->isCaptured()) {
-            seat()->m_lastMods = shareModsFromAllKBs(DEPRESSED_MODS_HL);
+            SEAT->m_lastMods = shareModsFromAllKBs(pKeyboard, DEPRESSED_MODS_HL);
             return;
         }
     }
@@ -1917,9 +1919,9 @@ void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
     // use merged mods states when sending to ime or when sending to seat with no ime
     // if passing from ime, send mods directly without merging
     if (USEIME || !HASIME) {
-        const auto ALLMODS = shareModsFromAllKBs(DEPRESSED_MODS_HL);
+        const auto ALLMODS = shareModsFromAllKBs(pKeyboard, DEPRESSED_MODS_HL);
         MODS.depressed |= hyprlandModsToXkb(pKeyboard, ALLMODS);
-        seat()->m_lastMods = ALLMODS;
+        SEAT->m_lastMods = ALLMODS;
     }
 
     if (USEIME) {
@@ -2101,17 +2103,17 @@ const std::vector<uint32_t>& CInputManager::getKeysFromAllKBs() {
     return seat()->m_pressed;
 }
 
-Input::ModifierMask CInputManager::getModsFromAllKBs() {
-    return seat()->m_lastMods;
+Input::ModifierMask CInputManager::getModsFromAllKBs(IHID* ctx) {
+    return (ctx ? ownerSeatFor(ctx) : seat())->m_lastMods;
 }
 
-bool CInputManager::shareKeyFromAllKBs(uint32_t key, bool pressed) {
+bool CInputManager::shareKeyFromAllKBs(SP<IKeyboard> relative, uint32_t key, bool pressed) {
     bool finalState = pressed;
 
     if (finalState)
         return finalState;
 
-    for (auto const& kb : seat()->m_keyboards) {
+    for (auto const& kb : ownerSeatFor(relative.get())->m_keyboards) {
         if (!kb->shareStates())
             continue;
 
@@ -2129,10 +2131,10 @@ bool CInputManager::shareKeyFromAllKBs(uint32_t key, bool pressed) {
     return finalState;
 }
 
-Input::ModifierMask CInputManager::shareModsFromAllKBs(Input::ModifierMask mask) {
+Input::ModifierMask CInputManager::shareModsFromAllKBs(SP<IKeyboard> relative, Input::ModifierMask mask) {
     Input::ModifierMask finalMask = mask;
 
-    for (auto const& kb : seat()->m_keyboards) {
+    for (auto const& kb : ownerSeatFor(relative.get())->m_keyboards) {
         if (!kb->shareStates())
             continue;
 
@@ -2149,12 +2151,15 @@ Input::ModifierMask CInputManager::shareModsFromAllKBs(Input::ModifierMask mask)
 }
 
 void CInputManager::disableAllKeyboards(bool virt) {
+    // every seat: today all devices live in the default seat, so this is
+    // behavior-identical while already being seat-correct for Phase 2+
+    for (auto const& s : g_pSeatManager->seats()) {
+        for (auto const& k : s->m_keyboards) {
+            if (k->isVirtual() != virt)
+                continue;
 
-    for (auto const& k : seat()->m_keyboards) {
-        if (k->isVirtual() != virt)
-            continue;
-
-        k->m_active = false;
+            k->m_active = false;
+        }
     }
 }
 

@@ -20,3 +20,11 @@ const std::string& CSeat::name() const {
 bool CSeat::isDefault() const {
     return m_isDefault;
 }
+
+bool CSeat::hasLiveDevices() const {
+    for (auto const& hid : m_hids) {
+        if (!hid.expired())
+            return true;
+    }
+    return false;
+}
