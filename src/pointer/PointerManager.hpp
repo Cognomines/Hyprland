@@ -128,6 +128,14 @@ namespace Pointer {
         bool hasCursor();
         void damageIfSoftware();
 
+        // P4-lite: per-seat cursor support
+        SP<CSeat> seatForDevice(SP<IHID> dev);
+        Vector2D& posRefFor(SP<CSeat> seat);
+        bool      hasForeignCursors() const;
+        void      damageForeignCursor(SP<CSeat> seat, const Vector2D& oldPos);
+        CBox      foreignCursorBoxGlobal(SP<CSeat> seat, std::optional<Vector2D> pos = {});
+        // retires / restores the hardware plane when foreign-cursor activity starts or stops
+        void ensureBackendModeUpdated();
         // closest valid point to a given one
         Vector2D closestValid(const Vector2D& pos);
 
@@ -195,6 +203,9 @@ namespace Pointer {
         std::vector<SCursorImageData> m_cursorImages;
 
         Vector2D                      m_pointerPos = {0, 0};
+
+        // tracks whether the hardware plane was retired for foreign cursors
+        bool m_foreignBackendActive = false;
 
         struct SMonitorPointerState {
             SMonitorPointerState(const PHLMONITOR& m) : monitor(m) {}
