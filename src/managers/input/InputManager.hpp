@@ -6,6 +6,7 @@
 #include "../../helpers/WLClasses.hpp"
 #include "../../helpers/time/Timer.hpp"
 #include "InputMethodRelay.hpp"
+#include "Seat.hpp"
 #include "../../helpers/signal/Signal.hpp"
 #include "../../desktop/view/WLSurface.hpp"
 #include "../../devices/IPointer.hpp"
@@ -159,15 +160,11 @@ class CInputManager {
     STouchData         m_touchData;
 
     // for refocus to be forced
-    PHLWINDOWREF                 m_forcedFocus;
+    PHLWINDOWREF m_forcedFocus;
 
-    std::vector<SP<IKeyboard>>   m_keyboards;
-    std::vector<SP<IPointer>>    m_pointers;
-    std::vector<SP<ITouch>>      m_touches;
-    std::vector<SP<CTablet>>     m_tablets;
-    std::vector<SP<CTabletTool>> m_tabletTools;
-    std::vector<SP<CTabletPad>>  m_tabletPads;
-    std::vector<WP<IHID>>        m_hids; // general container for all HID devices connected to the input manager.
+    // the ambient seat: until seats are configurable (see logicalseats.md),
+    // this is always the default seat and holds all devices.
+    SP<CSeat> seat();
 
     // Switches
     std::list<SSwitchDevice> m_switches;
@@ -246,8 +243,6 @@ class CInputManager {
 
     void               disableAllKeyboards(bool virt = false);
 
-    uint32_t           m_capabilities = 0;
-
     void               mouseMoveUnified(uint32_t, bool refocus = false, bool mouse = false, std::optional<Vector2D> overridePos = std::nullopt);
     void               recheckMouseWarpOnMouseInput();
 
@@ -264,18 +259,6 @@ class CInputManager {
     Vector2D m_lastMousePos   = {};
     double   m_mousePosDelta  = 0;
     bool     m_lastInputMouse = true;
-
-    // for holding focus on buttons held
-    bool m_focusHeldByButtons   = false;
-    bool m_refocusHeldByButtons = false;
-
-    struct SHeldPointerButton {
-        uint32_t     button = 0;
-        WP<IPointer> pointer;
-    };
-
-    // for releasing mouse buttons
-    std::list<SHeldPointerButton> m_currentlyHeldButtons;
 
     // idle inhibitors
     struct SIdleInhibitor {
@@ -296,21 +279,10 @@ class CInputManager {
         std::string                   name; // if not empty, means set by name.
     } m_cursorSurfaceInfo;
 
-    void restoreCursorIconToApp(); // no-op if restored
+    void                restoreCursorIconToApp(); // no-op if restored
 
-    // discrete scrolling emulation using v120 data
-    struct {
-        bool     lastEventSign     = false;
-        bool     lastEventAxis     = false;
-        uint32_t lastEventTime     = 0;
-        uint32_t accumulatedScroll = 0;
-    } m_scrollWheelState;
-    bool                  m_pointerAxisFramePending = false;
-
-    bool                  shareKeyFromAllKBs(uint32_t key, bool pressed);
-    Input::ModifierMask   shareModsFromAllKBs(Input::ModifierMask mask);
-    std::vector<uint32_t> m_pressed;
-    Input::ModifierMask   m_lastMods = Input::HL_MODIFIER_NONE;
+    bool                shareKeyFromAllKBs(uint32_t key, bool pressed);
+    Input::ModifierMask shareModsFromAllKBs(Input::ModifierMask mask);
 
     friend class Desktop::View::CWLSurface;
     friend class CWorkspaceSwipeGesture;

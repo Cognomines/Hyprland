@@ -3,7 +3,12 @@
 #include <cstdint>
 #include <string>
 #include <set>
+#include <hyprutils/memory/WeakPtr.hpp>
 #include "../helpers/signal/Signal.hpp"
+
+struct libinput_device;
+
+class CSeat;
 
 enum eHIDCapabilityType : uint8_t {
     HID_INPUT_CAPABILITY_KEYBOARD = (1 << 0),

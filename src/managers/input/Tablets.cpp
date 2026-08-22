@@ -245,8 +245,8 @@ void CInputManager::onTabletProximity(CTablet::SProximityEvent e) {
 }
 
 void CInputManager::newTablet(SP<Aquamarine::ITablet> pDevice) {
-    const auto PNEWTABLET = m_tablets.emplace_back(CTablet::create(pDevice));
-    m_hids.emplace_back(PNEWTABLET);
+    const auto PNEWTABLET = seat()->m_tablets.emplace_back(CTablet::create(pDevice));
+    seat()->m_hids.emplace_back(PNEWTABLET);
 
     try {
         PNEWTABLET->m_hlName = g_pInputManager->getNameForNewDevice(pDevice->getName());
@@ -266,13 +266,13 @@ void CInputManager::newTablet(SP<Aquamarine::ITablet> pDevice) {
 
 SP<CTabletTool> CInputManager::ensureTabletToolPresent(SP<Aquamarine::ITabletTool> pTool) {
 
-    for (auto const& t : m_tabletTools) {
+    for (auto const& t : seat()->m_tabletTools) {
         if (t->aq() == pTool)
             return t;
     }
 
-    const auto PTOOL = m_tabletTools.emplace_back(CTabletTool::create(pTool));
-    m_hids.emplace_back(PTOOL);
+    const auto PTOOL = seat()->m_tabletTools.emplace_back(CTabletTool::create(pTool));
+    seat()->m_hids.emplace_back(PTOOL);
 
     try {
         PTOOL->m_hlName = g_pInputManager->getNameForNewDevice(pTool->getName());
@@ -291,8 +291,8 @@ SP<CTabletTool> CInputManager::ensureTabletToolPresent(SP<Aquamarine::ITabletToo
 }
 
 void CInputManager::newTabletPad(SP<Aquamarine::ITabletPad> pDevice) {
-    const auto PNEWPAD = m_tabletPads.emplace_back(CTabletPad::create(pDevice));
-    m_hids.emplace_back(PNEWPAD);
+    const auto PNEWPAD = seat()->m_tabletPads.emplace_back(CTabletPad::create(pDevice));
+    seat()->m_hids.emplace_back(PNEWPAD);
 
     try {
         PNEWPAD->m_hlName = g_pInputManager->getNameForNewDevice(pDevice->getName());
