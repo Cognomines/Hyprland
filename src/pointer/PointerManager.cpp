@@ -480,6 +480,65 @@ void CPointerManager::onCursorMoved() {
         updateCursorBackend();
 }
 
+<<<<<<< HEAD
+=======
+SP<CSeat> CPointerManager::seatForDevice(SP<IHID> dev) {
+    if (dev) {
+        if (const auto SEAT = dev->m_seat.lock(); SEAT)
+            return SEAT;
+    }
+
+    return g_pSeatManager->defaultSeat();
+}
+
+Vector2D& CPointerManager::posRefFor(SP<CSeat> seat) {
+    return seat && !seat->isDefault() ? seat->m_cursorPos : m_pointerPos;
+}
+
+bool CPointerManager::hasForeignCursors() const {
+    for (auto const& s : g_pSeatManager->seats()) {
+        if (!s->isDefault() && s->m_cursorActive && s->hasLiveDevices())
+            return true;
+    }
+    return false;
+}
+
+void CPointerManager::ensureBackendModeUpdated() {
+    const bool FOREIGN = hasForeignCursors();
+    if (FOREIGN == m_foreignBackendActive)
+        return;
+
+    m_foreignBackendActive = FOREIGN;
+    updateCursorBackend();
+}
+
+CBox CPointerManager::foreignCursorBoxGlobal(SP<CSeat> seat, std::optional<Vector2D> pos) {
+    return CBox{pos.value_or(seat->m_cursorPos), m_currentCursorImage.size / m_currentCursorImage.scale}.translate(-m_currentCursorImage.hotspot);
+}
+
+void CPointerManager::damageForeignCursor(SP<CSeat> seat, const Vector2D& oldPos) {
+    // mirror damageIfSoftware: register real damage for both the stale and the
+    // new cursor box. bare scheduleFrame() commits nothing — without damage the
+    // cursor only repaints when unrelated damage lands, which reads as stutter.
+    const auto OLDBOX = foreignCursorBoxGlobal(seat, oldPos).expand(4);
+    const auto NEWBOX = foreignCursorBoxGlobal(seat, seat->m_cursorPos).expand(4);
+
+    for (auto const& mw : m_monitorStates) {
+        auto monitor = mw->monitor.lock();
+        if (!monitor || !monitor->m_output || monitor->isMirror())
+            continue;
+
+        for (auto const& b : {OLDBOX, NEWBOX}) {
+            if (!b.overlaps({monitor->m_position, monitor->m_size}))
+                continue;
+
+            CBox damageBox = b.copy().translate(-monitor->m_position).scale(monitor->m_scale).round();
+            monitor->addDamage(damageBox);
+        }
+    }
+}
+
+>>>>>>> e4003b675 (input,pointer: per-seat input routing + dual-cursor rendering)
 bool CPointerManager::attemptHardwareCursor(SP<CPointerManager::SMonitorPointerState> state) {
     auto output = state->monitor->m_output;
 
@@ -901,20 +960,55 @@ void CPointerManager::damageIfSoftware() {
     }
 }
 
-void CPointerManager::warpTo(const Vector2D& logical) {
+void CPointerManager::warpTo(const Vector2D& logical, SP<IHID> dev) {
+    const auto SEAT = seatForDevice(dev);
+    auto&      POS  = posRefFor(SEAT);
+
+    const auto OLD_POS = POS;
+
+    ensureBackendModeUpdated();
     damageIfSoftware();
 
     m_pointerPos = closestValid(logical);
 
-    if (!g_pInputManager->isLocked()) {
-        recheckEnteredOutputs();
-        onCursorMoved();
+    if (SEAT->isDefault()) {
+        if (!g_pInputManager->isLocked()) {
+            recheckEnteredOutputs();
+            onCursorMoved();
+        }
+        damageIfSoftware();
+        return;
     }
 
-    damageIfSoftware();
+    POS                  = closestValid(POS);
+    SEAT->m_cursorActive = true;
+    damageForeignCursor(SEAT, OLD_POS);
+    if (!g_pInputManager->isLocked()) {
+        g_pInputManager->mouseMoveUnified(Time::millis(Time::steadyNow()), false, true, POS);
+        recheckEnteredOutputs();
+    }
+    damageForeignCursor(SEAT, POS);
 }
 
-void CPointerManager::move(const Vector2D& deltaLogical) {
+void CPointerManager::move(const Vector2D& deltaLogical, SP<IHID> dev) {
+    const auto SEAT = seatForDevice(dev);
+
+    if (!SEAT->isDefault()) {
+        // lite path: independent position, no input-capture interplay yet
+        auto&      POS    = posRefFor(SEAT);
+        const auto OLDPOS = POS;
+        const auto NEWPOS = POS + Vector2D{std::isnan(deltaLogical.x) ? 0.0 : deltaLogical.x, std::isnan(deltaLogical.y) ? 0.0 : deltaLogical.y};
+
+        ensureBackendModeUpdated();
+
+        POS                  = closestValid(NEWPOS);
+        SEAT->m_cursorActive = true;
+        damageForeignCursor(SEAT, OLDPOS);
+        damageForeignCursor(SEAT, POS);
+        if (!g_pInputManager->isLocked())
+            g_pInputManager->mouseMoveUnified(Time::millis(Time::steadyNow()), false, true, POS);
+        return;
+    }
     const auto oldPos = m_pointerPos;
     auto       newPos = oldPos + Vector2D{std::isnan(deltaLogical.x) ? 0.0 : deltaLogical.x, std::isnan(deltaLogical.y) ? 0.0 : deltaLogical.y};
 
@@ -1011,6 +1105,16 @@ void CPointerManager::warpAbsolute(Vector2D abs, SP<IHID> dev, WP<Aquamarine::IO
 
     damageIfSoftware();
 
+<<<<<<< HEAD
+=======
+    const auto SEAT = seatForDevice(dev);
+    auto&      POS  = posRefFor(SEAT);
+
+    ensureBackendModeUpdated();
+
+    const auto OLD_POS = POS;
+
+>>>>>>> e4003b675 (input,pointer: per-seat input routing + dual-cursor rendering)
     if (std::isnan(abs.x) || std::isnan(abs.y)) {
         m_pointerPos.x = std::isnan(abs.x) ? m_pointerPos.x : mappedArea.x + mappedArea.w * abs.x;
         m_pointerPos.y = std::isnan(abs.y) ? m_pointerPos.y : mappedArea.y + mappedArea.h * abs.y;
@@ -1019,8 +1123,18 @@ void CPointerManager::warpAbsolute(Vector2D abs, SP<IHID> dev, WP<Aquamarine::IO
         m_pointerPos      = mappedToSourceOutput ? mappedArea.closestPoint(MAPPED) : MAPPED;
     }
 
+<<<<<<< HEAD
     onCursorMoved();
     recheckEnteredOutputs();
+=======
+    SEAT->m_cursorActive = true;
+
+    if (SEAT->isDefault()) {
+        onCursorMoved();
+        recheckEnteredOutputs();
+    } else
+        damageForeignCursor(SEAT, OLD_POS);
+>>>>>>> e4003b675 (input,pointer: per-seat input routing + dual-cursor rendering)
 
     damageIfSoftware();
 }
