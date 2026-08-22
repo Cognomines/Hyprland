@@ -172,7 +172,7 @@ SP<CTestKeyboard>      g_keyboard;
 SP<CTestKeyboard>      g_keyboard2;
 
 static SDispatchResult pressAlt(std::string in) {
-    g_pInputManager->m_lastMods = in == "1" ? Input::HL_MODIFIER_ALT : Input::HL_MODIFIER_NONE;
+    g_pInputManager->seat()->m_lastMods = in == "1" ? Input::HL_MODIFIER_ALT : Input::HL_MODIFIER_NONE;
 
     return {.success = true};
 }
@@ -400,7 +400,7 @@ static SDispatchResult keybind(std::string in) {
     Input::ModifierMask modifierMask = Input::HL_MODIFIER_NONE;
     if (modifier > 0)
         modifierMask = sc<Input::ModifierMask>(1 << (modifier - 1));
-    g_pInputManager->m_lastMods = modifierMask;
+    g_pInputManager->seat()->m_lastMods = modifierMask;
     g_keyboard->sendKey(key, press);
 
     return {};
@@ -420,7 +420,7 @@ static SDispatchResult keybind2(std::string in) {
     Input::ModifierMask modifierMask = Input::HL_MODIFIER_NONE;
     if (modifier > 0)
         modifierMask = sc<Input::ModifierMask>(1 << (modifier - 1));
-    g_pInputManager->m_lastMods = modifierMask;
+    g_pInputManager->seat()->m_lastMods = modifierMask;
     g_keyboard2->sendKey(key, press);
 
     return {};
@@ -441,7 +441,7 @@ static SDispatchResult keybindModmask(std::string in) {
         key          = std::stoul(std::string{data[2]}) - 8; // xkb offset
     } catch (...) { return {.success = false, .error = "invalid input"}; }
 
-    g_pInputManager->m_lastMods = g_pInputManager->xkbModsToHyprland(g_keyboard, modifierMask);
+    g_pInputManager->seat()->m_lastMods = g_pInputManager->xkbModsToHyprland(g_keyboard, modifierMask);
     g_keyboard->setMods(modifierMask, 0, 0, 0);
     g_keyboard->sendKey(key, press);
 

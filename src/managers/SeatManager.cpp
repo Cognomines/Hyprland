@@ -32,7 +32,26 @@ static bool surfaceInTree(SP<CWLSurfaceResource> root, SP<CWLSurfaceResource> su
 }
 
 CSeatManager::CSeatManager() {
+    m_seats.emplace_back(makeShared<CSeat>(DEFAULT_SEAT_NAME, true));
+
     m_listeners.newSeatResource = PROTO::seat->m_events.newSeatResource.listen([this](const auto& resource) { onNewSeatResource(resource); });
+}
+
+SP<CSeat> CSeatManager::defaultSeat() {
+    return m_seats.front();
+}
+
+std::vector<SP<CSeat>>& CSeatManager::seats() {
+    return m_seats;
+}
+
+SP<CSeat> CSeatManager::seatByName(const std::string& name) {
+    for (auto const& s : m_seats) {
+        if (s->name() == name)
+            return s;
+    }
+
+    return nullptr;
 }
 
 CSeatManager::SSeatResourceContainer::SSeatResourceContainer(SP<CWLSeatResource> res) : resource(res) {
@@ -237,7 +256,7 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
             uint32_t depressed = m_keyboard->m_modifiersState.depressed;
             uint32_t latched   = m_keyboard->m_modifiersState.latched;
             uint32_t locked    = m_keyboard->m_modifiersState.locked;
-            for (auto const& kb : g_pInputManager->m_keyboards) {
+            for (auto const& kb : g_pInputManager->seat()->m_keyboards) {
                 if (!kb->m_enabled || !kb->shareStates() || (kb->isVirtual() && g_pInputManager->shouldIgnoreVirtualKeyboard(kb)))
                     continue;
                 depressed |= kb->m_modifiersState.depressed;
