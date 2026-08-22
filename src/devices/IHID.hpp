@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <set>
-#include <hyprutils/memory/WeakPtr.hpp>
+#include "../defines.hpp"
 #include "../helpers/signal/Signal.hpp"
 
 struct libinput_device;
@@ -31,12 +31,24 @@ enum eHIDType : uint8_t {
     Base class for a HID device.
     This could be a keyboard, a mouse, or a touchscreen.
 */
+struct SDeviceIdentity {
+    std::string name;      // kernel-reported device name
+    uint16_t    vendor  = 0;
+    uint16_t    product = 0;
+    std::string idPath;    // stable physical port chain (udev ID_PATH or evdev phys)
+    std::string serial;    // unit serial if reported, else empty
+};
+
 class IHID {
   public:
     virtual ~IHID() = default;
 
-    virtual uint32_t getCapabilities() = 0;
-    virtual eHIDType getType();
+    virtual uint32_t        getCapabilities() = 0;
+    virtual eHIDType        getType();
+    virtual libinput_device* libinputHandle() const;
+
+    // fills m_identity from the kernel via the libinput handle; no-op for virtual devices
+    void fillIdentity();
 
     struct {
         CSignalT<> destroy;
@@ -45,4 +57,6 @@ class IHID {
     std::string           m_deviceName;
     std::string           m_hlName;
     std::set<std::string> m_deviceTags;
+    SDeviceIdentity       m_identity;
+    WP<CSeat>             m_seat;
 };

@@ -65,6 +65,13 @@ SP<Aquamarine::ITablet> CTablet::aq() {
     return m_tablet.lock();
 }
 
+libinput_device* CTablet::libinputHandle() const {
+    const auto TAB = m_tablet.lock();
+    if (!TAB)
+        return nullptr;
+    return TAB->getLibinputHandle();
+}
+
 CTablet::CTablet(SP<Aquamarine::ITablet> tablet_) : m_tablet(tablet_) {
     if (!m_tablet)
         return;
@@ -140,6 +147,13 @@ SP<Aquamarine::ITabletPad> CTabletPad::aq() {
     return m_pad.lock();
 }
 
+libinput_device* CTabletPad::libinputHandle() const {
+    const auto PAD = m_pad.lock();
+    if (!PAD)
+        return nullptr;
+    return PAD->getLibinputHandle();
+}
+
 eHIDType CTabletPad::getType() {
     return HID_TYPE_TABLET_PAD;
 }
@@ -200,6 +214,13 @@ uint32_t CTabletTool::getCapabilities() {
 
 SP<Aquamarine::ITabletTool> CTabletTool::aq() {
     return m_tool.lock();
+}
+
+libinput_device* CTabletTool::libinputHandle() const {
+    const auto TOOL = m_tool.lock();
+    if (!TOOL)
+        return nullptr;
+    return TOOL->getLibinputHandle();
 }
 
 eHIDType CTabletTool::getType() {
