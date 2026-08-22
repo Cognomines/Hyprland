@@ -3,6 +3,8 @@
 #include <string>
 #include <filesystem>
 #include <expected>
+#include <unordered_map>
+#include <vector>
 
 #include "./shared/Types.hpp"
 #include "../helpers/memory/Memory.hpp"
@@ -30,6 +32,16 @@ namespace Config {
 
     const char* typeToString(eConfigManagerType t);
 
+    // one matcher entry of a hl.seat{} device list; empty fields are unset and
+    // set fields must all match (AND) for a device to be claimed.
+    struct SSeatMatcher {
+        std::string name, vid, pid, path, tag, serial;
+    };
+
+    struct SSeatConfig {
+        std::vector<SSeatMatcher> keyboards, pointers, touches, tablets;
+    };
+
     class IConfigManager {
       protected:
         IConfigManager() = default;
@@ -49,6 +61,9 @@ namespace Config {
         virtual std::string                      getDeviceString(const std::string&, const std::string&, const std::string& fallback = "") = 0;
         virtual bool                             deviceConfigExplicitlySet(const std::string&, const std::string&)                         = 0;
         virtual bool                             deviceConfigExists(const std::string&)                                                    = 0;
+
+        // all parsed hl.seat{} blocks by seat name; callers must treat as read-only
+        virtual const std::unordered_map<std::string, SSeatConfig>& seatConfigs() = 0;
 
         virtual SConfigOptionReply               getConfigValue(const std::string&) = 0;
 

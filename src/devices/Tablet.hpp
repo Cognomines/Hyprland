@@ -25,6 +25,7 @@ class CTablet : public IHID {
     virtual uint32_t        getCapabilities();
     virtual eHIDType        getType();
     SP<Aquamarine::ITablet> aq();
+    virtual libinput_device* libinputHandle() const override;
 
     enum eTabletToolAxes : uint16_t {
         HID_TABLET_TOOL_AXIS_X        = (1 << 0),
@@ -118,6 +119,7 @@ class CTabletPad : public IHID {
     virtual uint32_t           getCapabilities();
     virtual eHIDType           getType();
     SP<Aquamarine::ITabletPad> aq();
+    virtual libinput_device*   libinputHandle() const override;
 
     struct SButtonEvent {
         uint32_t timeMs = 0;
@@ -197,6 +199,7 @@ class CTabletTool : public IHID {
     virtual eHIDType            getType();
     SP<CWLSurfaceResource>      getSurface();
     void                        setSurface(SP<CWLSurfaceResource>);
+    virtual libinput_device*    libinputHandle() const override;
 
     WP<CTabletTool>             m_self;
     Vector2D                    m_tilt;

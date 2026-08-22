@@ -1038,6 +1038,10 @@ bool CConfigManager::deviceConfigExists(const std::string& dev) {
     return m_deviceConfigs.contains(normalizeDeviceName(dev));
 }
 
+const std::unordered_map<std::string, Config::SSeatConfig>& CConfigManager::seatConfigs() {
+    return m_seatConfigs;
+}
+
 SConfigOptionReply CConfigManager::getConfigValue(const std::string& s) {
 
     if (m_configValues.contains(s)) {

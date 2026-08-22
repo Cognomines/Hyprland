@@ -50,6 +50,9 @@ class CSeatManager {
     SP<CSeat>               defaultSeat();
     std::vector<SP<CSeat>>& seats();
     SP<CSeat>               seatByName(const std::string& name);
+    // looks up a seat by name, creating an implicit seat if missing.
+    // libinput's "default"/"seat0" names and the empty string map to the default seat.
+    SP<CSeat> ensureSeat(const std::string& name);
 
     void                    updateCapabilities(uint32_t capabilities); // in IHID caps
 

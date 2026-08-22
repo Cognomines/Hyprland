@@ -737,6 +737,23 @@ static std::string configErrorsRequest(eHyprCtlOutputFormat format, std::string 
     return result;
 }
 
+static std::string seatIdentityLine(IHID* dev) {
+    const auto SEAT = dev->m_seat.lock();
+    auto&      id   = dev->m_identity;
+
+    std::string line = std::format("\t\t\tseat: {}", SEAT ? SEAT->name() : DEFAULT_SEAT_NAME);
+
+    if (id.vendor != 0 || id.product != 0)
+        line += std::format(", vid:pid: {:04x}:{:04x}", id.vendor, id.product);
+    if (!id.idPath.empty())
+        line += std::format(", path: {}", id.idPath);
+    if (!id.serial.empty())
+        line += std::format(", serial: {}", id.serial);
+
+    line += "\n";
+    return line;
+}
+
 static std::string devicesRequest(eHyprCtlOutputFormat format, std::string request) {
     std::string result = "";
 
@@ -869,6 +886,7 @@ static std::string devicesRequest(eHyprCtlOutputFormat format, std::string reque
             result += std::format("\tMouse at {:x}:\n\t\t{}\n\t\t\tdefault speed: {:.5f}\n\t\t\tscroll factor: {:.2f}\n", rc<uintptr_t>(m.get()), m->m_hlName,
                                   (m->aq() && m->aq()->getLibinputHandle() ? libinput_device_config_accel_get_default_speed(m->aq()->getLibinputHandle()) : 0.f),
                                   m->m_scrollFactor.value_or(-1));
+            result += seatIdentityLine(m.get());
         }
 
         result += "\n\nKeyboards:\n";
@@ -883,6 +901,7 @@ static std::string devicesRequest(eHyprCtlOutputFormat format, std::string reque
                                   rc<uintptr_t>(k.get()), k->m_hlName, k->m_currentRules.rules, k->m_currentRules.model, k->m_currentRules.layout, k->m_currentRules.variant,
                                   k->m_currentRules.options, KI, KM, (getModState(k, XKB_MOD_NAME_CAPS) ? "yes" : "no"), (getModState(k, XKB_MOD_NAME_NUM) ? "yes" : "no"),
                                   (k->m_active ? "yes" : "no"));
+            result += seatIdentityLine(k.get());
         }
 
         result += "\n\nTablets:\n";
@@ -894,16 +913,19 @@ static std::string devicesRequest(eHyprCtlOutputFormat format, std::string reque
 
         for (auto const& d : g_pInputManager->seat()->m_tablets) {
             result += std::format("\tTablet at {:x}:\n\t\t{}\n\t\t\tsize: {}x{}mm\n", rc<uintptr_t>(d.get()), d->m_hlName, d->aq()->physicalSize.x, d->aq()->physicalSize.y);
+            result += seatIdentityLine(d.get());
         }
 
         for (auto const& d : g_pInputManager->seat()->m_tabletTools) {
             result += std::format("\tTablet Tool at {:x}\n", rc<uintptr_t>(d.get()));
+            result += seatIdentityLine(d.get());
         }
 
         result += "\n\nTouch:\n";
 
         for (auto const& d : g_pInputManager->seat()->m_touches) {
             result += std::format("\tTouch Device at {:x}:\n\t\t{}\n", rc<uintptr_t>(d.get()), d->m_hlName);
+            result += seatIdentityLine(d.get());
         }
 
         result += "\n\nSwitches:\n";

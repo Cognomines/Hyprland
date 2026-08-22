@@ -245,14 +245,20 @@ void CInputManager::onTabletProximity(CTablet::SProximityEvent e) {
 }
 
 void CInputManager::newTablet(SP<Aquamarine::ITablet> pDevice) {
-    const auto PNEWTABLET = seat()->m_tablets.emplace_back(CTablet::create(pDevice));
-    seat()->m_hids.emplace_back(PNEWTABLET);
+    const auto PNEWTABLET = CTablet::create(pDevice);
 
     try {
         PNEWTABLET->m_hlName = g_pInputManager->getNameForNewDevice(pDevice->getName());
     } catch (std::exception& e) {
         Log::logger->log(Log::ERR, "Tablet had no name???"); // logic error
     }
+
+    PNEWTABLET->fillIdentity();
+
+    // register with the resolved owner seat
+    const auto SEAT = assignDeviceToSeat(PNEWTABLET.get());
+    SEAT->m_tablets.emplace_back(PNEWTABLET);
+    SEAT->m_hids.emplace_back(PNEWTABLET);
 
     Pointer::mgr()->attachTablet(PNEWTABLET);
 
@@ -266,19 +272,27 @@ void CInputManager::newTablet(SP<Aquamarine::ITablet> pDevice) {
 
 SP<CTabletTool> CInputManager::ensureTabletToolPresent(SP<Aquamarine::ITabletTool> pTool) {
 
-    for (auto const& t : seat()->m_tabletTools) {
-        if (t->aq() == pTool)
-            return t;
+    for (auto const& s : g_pSeatManager->seats()) {
+        for (auto const& t : s->m_tabletTools) {
+            if (t->aq() == pTool)
+                return t;
+        }
     }
 
-    const auto PTOOL = seat()->m_tabletTools.emplace_back(CTabletTool::create(pTool));
-    seat()->m_hids.emplace_back(PTOOL);
+    const auto PTOOL = CTabletTool::create(pTool);
 
     try {
         PTOOL->m_hlName = g_pInputManager->getNameForNewDevice(pTool->getName());
     } catch (std::exception& e) {
         Log::logger->log(Log::ERR, "Tablet had no name???"); // logic error
     }
+
+    PTOOL->fillIdentity();
+
+    // register with the resolved owner seat
+    const auto SEAT = assignDeviceToSeat(PTOOL.get());
+    SEAT->m_tabletTools.emplace_back(PTOOL);
+    SEAT->m_hids.emplace_back(PTOOL);
 
     PTOOL->m_events.destroy.listenStatic([this, tool = PTOOL.get()] {
         auto TOOL = tool->m_self;
@@ -291,14 +305,20 @@ SP<CTabletTool> CInputManager::ensureTabletToolPresent(SP<Aquamarine::ITabletToo
 }
 
 void CInputManager::newTabletPad(SP<Aquamarine::ITabletPad> pDevice) {
-    const auto PNEWPAD = seat()->m_tabletPads.emplace_back(CTabletPad::create(pDevice));
-    seat()->m_hids.emplace_back(PNEWPAD);
+    const auto PNEWPAD = CTabletPad::create(pDevice);
 
     try {
         PNEWPAD->m_hlName = g_pInputManager->getNameForNewDevice(pDevice->getName());
     } catch (std::exception& e) {
         Log::logger->log(Log::ERR, "Pad had no name???"); // logic error
     }
+
+    PNEWPAD->fillIdentity();
+
+    // register with the resolved owner seat
+    const auto SEAT = assignDeviceToSeat(PNEWPAD.get());
+    SEAT->m_tabletPads.emplace_back(PNEWPAD);
+    SEAT->m_hids.emplace_back(PNEWPAD);
 
     PNEWPAD->m_events.destroy.listenStatic([this, pad = PNEWPAD.get()] {
         auto PAD = pad->m_self;

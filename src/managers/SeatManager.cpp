@@ -14,6 +14,7 @@
 #include "../managers/input/InputManager.hpp"
 #include "../state/MonitorState.hpp"
 #include "devices/IHID.hpp"
+#include "input/SeatMatching.hpp"
 #include "wlr-layer-shell-unstable-v1.hpp"
 #include <algorithm>
 #include <hyprutils/utils/ScopeGuard.hpp>
@@ -52,6 +53,17 @@ SP<CSeat> CSeatManager::seatByName(const std::string& name) {
     }
 
     return nullptr;
+}
+
+SP<CSeat> CSeatManager::ensureSeat(const std::string& name) {
+    if (isDefaultLibinputSeatName(name) || name == DEFAULT_SEAT_NAME)
+        return defaultSeat();
+
+    if (const auto SEAT = seatByName(name); SEAT)
+        return SEAT;
+
+    Log::logger->log(Log::DEBUG, "seatManager: creating implicit seat {}", name);
+    return m_seats.emplace_back(makeShared<CSeat>(name, false));
 }
 
 CSeatManager::SSeatResourceContainer::SSeatResourceContainer(SP<CWLSeatResource> res) : resource(res) {

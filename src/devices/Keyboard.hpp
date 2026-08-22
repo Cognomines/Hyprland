@@ -8,6 +8,7 @@ class CKeyboard : public IKeyboard {
 
     virtual bool                      isVirtual();
     virtual SP<Aquamarine::IKeyboard> aq();
+    virtual libinput_device*          libinputHandle() const override;
 
   private:
     CKeyboard(SP<Aquamarine::IKeyboard> keeb);

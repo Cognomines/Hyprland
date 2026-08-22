@@ -1164,6 +1164,143 @@ static int hlMonitor(lua_State* L) {
     return 0;
 }
 
+static constexpr std::array SEAT_LISTS{
+    std::pair{"keyboards", &Config::SSeatConfig::keyboards},
+    std::pair{"pointers", &Config::SSeatConfig::pointers},
+    std::pair{"touches", &Config::SSeatConfig::touches},
+    std::pair{"tablets", &Config::SSeatConfig::tablets},
+};
+
+static bool seatMatcherFromLua(Config::SSeatMatcher& out, lua_State* L, int idx, CConfigManager* self, const std::string& sourceInfo) {
+    if (lua_isstring(L, idx)) {
+        out.name = lua_tostring(L, idx);
+        return true;
+    }
+
+    if (!lua_istable(L, idx)) {
+        self->addError(std::format("{}: hl.seat: device matchers must be strings or tables", sourceInfo));
+        return false;
+    }
+
+    bool ok = true;
+
+    lua_pushnil(L);
+    while (lua_next(L, idx) != 0) {
+        if (lua_type(L, -2) != LUA_TSTRING) {
+            lua_pop(L, 1);
+            continue;
+        }
+
+        const std::string key = lua_tostring(L, -2);
+
+        if (!lua_isstring(L, -1)) {
+            self->addError(std::format("{}: hl.seat: matcher field '{}' must be a string", sourceInfo, key));
+            lua_pop(L, 1);
+            ok = false;
+            continue;
+        }
+
+        const std::string val = lua_tostring(L, -1);
+
+        if (key == "name")
+            out.name = val;
+        else if (key == "vid")
+            out.vid = val;
+        else if (key == "pid")
+            out.pid = val;
+        else if (key == "path")
+            out.path = val;
+        else if (key == "tag")
+            out.tag = val;
+        else if (key == "serial")
+            out.serial = val;
+        else {
+            self->addError(std::format("{}: hl.seat: unknown matcher field '{}'", sourceInfo, key));
+            ok = false;
+        }
+
+        lua_pop(L, 1);
+    }
+
+    if (ok && out.name.empty() && out.vid.empty() && out.pid.empty() && out.path.empty() && out.tag.empty() && out.serial.empty()) {
+        self->addError(std::format("{}: hl.seat: empty device matcher", sourceInfo));
+        ok = false;
+    }
+
+    return ok;
+}
+
+static int hlSeat(lua_State* L) {
+    auto* self = sc<CConfigManager*>(lua_touserdata(L, lua_upvalueindex(1)));
+
+    if (!lua_istable(L, 1)) {
+        self->addError("hl.seat: argument must be a table");
+        return 0;
+    }
+
+    const std::string sourceInfo = Internal::getSourceInfo(L);
+
+    lua_getfield(L, 1, "name");
+    if (!lua_isstring(L, -1)) {
+        self->addError(std::format("{}: hl.seat: 'name' field is required and must be a string", sourceInfo));
+        lua_pop(L, 1);
+        return 0;
+    }
+    const std::string seatName = lua_tostring(L, -1);
+    lua_pop(L, 1);
+
+    if (seatName.empty() || seatName == DEFAULT_SEAT_NAME) {
+        self->addError(std::format("{}: hl.seat: '{}' is not a valid seat name", sourceInfo, seatName));
+        return 0;
+    }
+
+    Config::SSeatConfig cfg;
+
+    lua_pushnil(L);
+    while (lua_next(L, 1) != 0) {
+        if (lua_type(L, -2) != LUA_TSTRING) {
+            lua_pop(L, 1);
+            continue;
+        }
+
+        const std::string key = lua_tostring(L, -2);
+
+        const auto listIt = std::ranges::find_if(SEAT_LISTS, [&key](const auto& p) { return key == p.first; });
+        if (listIt == SEAT_LISTS.end()) {
+            self->addError(std::format("{}: hl.seat: unknown field '{}'", sourceInfo, key));
+            lua_pop(L, 1);
+            continue;
+        }
+
+        if (!lua_istable(L, -1)) {
+            self->addError(std::format("{}: hl.seat: field '{}' must be a table", sourceInfo, key));
+            lua_pop(L, 1);
+            continue;
+        }
+
+        auto&      list = cfg.*listIt->second;
+        const auto len  = sc<int>(lua_rawlen(L, -1));
+
+        for (int i = 1; i <= len; ++i) {
+            lua_rawgeti(L, -1, i);
+
+            Config::SSeatMatcher matcher;
+            if (seatMatcherFromLua(matcher, L, -1, self, sourceInfo))
+                list.emplace_back(std::move(matcher));
+
+            lua_pop(L, 1);
+        }
+
+        lua_pop(L, 1);
+    }
+
+    self->m_seatConfigs.insert_or_assign(seatName, std::move(cfg));
+
+    Supplementary::refresher()->scheduleRefresh(Supplementary::REFRESH_INPUT_DEVICES);
+
+    return 0;
+}
+
 static int hlWindowRule(lua_State* L) {
     auto* self = sc<CConfigManager*>(lua_touserdata(L, lua_upvalueindex(1)));
 
@@ -1394,6 +1531,7 @@ void Internal::registerConfigRuleBindings(lua_State* L, CConfigManager* mgr) {
     Internal::setMgrFn(L, mgr, "get_config", hlGetConfig);
     Internal::setMgrFn(L, mgr, "device", hlDevice);
     Internal::setMgrFn(L, mgr, "monitor", hlMonitor);
+    Internal::setMgrFn(L, mgr, "seat", hlSeat);
     Internal::setMgrFn(L, mgr, "window_rule", hlWindowRule);
     Internal::setMgrFn(L, mgr, "layer_rule", hlLayerRule);
     Internal::setMgrFn(L, mgr, "workspace_rule", hlWorkspaceRule);

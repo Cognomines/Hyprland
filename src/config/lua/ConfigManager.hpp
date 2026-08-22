@@ -72,6 +72,8 @@ namespace Config::Lua {
         virtual bool                             deviceConfigExplicitlySet(const std::string&, const std::string&) override;
         virtual bool                             deviceConfigExists(const std::string&) override;
 
+        virtual const std::unordered_map<std::string, Config::SSeatConfig>& seatConfigs() override;
+
         virtual SConfigOptionReply               getConfigValue(const std::string&) override;
 
         virtual std::string                      getMainConfigPath() override;
@@ -147,6 +149,9 @@ namespace Config::Lua {
         };
 
         std::unordered_map<std::string, SDeviceConfig> m_deviceConfigs;
+
+        std::unordered_map<std::string, Config::SSeatConfig> m_seatConfigs;
+
         std::vector<std::string>                       m_errors, m_configPaths, m_prints;
         std::vector<Config::SConfigError>              m_evalIssues;
 

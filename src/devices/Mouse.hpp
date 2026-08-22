@@ -8,6 +8,7 @@ class CMouse : public IPointer {
 
     virtual bool                     isVirtual();
     virtual SP<Aquamarine::IPointer> aq();
+    virtual libinput_device*         libinputHandle() const override;
 
   private:
     CMouse(SP<Aquamarine::IPointer> mouse);

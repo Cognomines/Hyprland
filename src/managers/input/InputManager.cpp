@@ -6,6 +6,8 @@
 #include <hyprutils/math/Vector2D.hpp>
 #include <ranges>
 #include <algorithm>
+#include <charconv>
+#include <fstream>
 #include "../../config/ConfigValue.hpp"
 #include "../../config/shared/actions/ConfigActions.hpp"
 #include "../../config/ConfigManager.hpp"
@@ -25,6 +27,7 @@
 #include "../../protocols/VirtualPointer.hpp"
 #include "../../protocols/LayerShell.hpp"
 #include "../../protocols/core/Seat.hpp"
+#include "SeatMatching.hpp"
 #include "../../protocols/core/DataDevice.hpp"
 #include "../../protocols/core/Compositor.hpp"
 #include "../../protocols/InputCapture.hpp"
@@ -1121,34 +1124,136 @@ Vector2D CInputManager::getMouseCoordsInternal() {
     return Pointer::mgr()->position();
 }
 
+// libinput logical seat name, e.g. from a udev WL_SEAT tag; empty when unavailable
+static std::string logicalSeatName(IHID* dev) {
+    auto* handle = dev->libinputHandle();
+    if (!handle)
+        return "";
+
+    auto* seat = libinput_device_get_seat(handle);
+    if (!seat)
+        return "";
+
+    const char* name = libinput_seat_get_logical_name(seat);
+    return name ? std::string{name} : std::string{};
+}
+
+// the seat a device currently belongs to, falling back to the default seat
+static SP<CSeat> ownerSeatFor(IHID* dev) {
+    if (const auto SEAT = dev->m_seat.lock(); SEAT)
+        return SEAT;
+
+    return g_pSeatManager->defaultSeat();
+}
+
+template <typename T>
+static void reassignTypedDevice(std::vector<SP<T>>& fromVec, std::vector<SP<T>>& toVec, SP<IHID> dev) {
+    const auto TYPED = dynamicPointerCast<T>(dev);
+    if (!TYPED)
+        return;
+
+    std::erase_if(fromVec, [&TYPED](const auto& o) { return o == TYPED; });
+    toVec.emplace_back(TYPED);
+}
+
+static void moveDeviceToSeat(SP<IHID> dev, SP<CSeat> from, SP<CSeat> to) {
+    if (from == to || !dev || !from || !to)
+        return;
+
+    std::erase_if(from->m_hids, [&dev](const auto& h) { return h.lock() == dev; });
+    to->m_hids.emplace_back(dev);
+
+    switch (dev->getType()) {
+        case HID_TYPE_KEYBOARD: reassignTypedDevice(from->m_keyboards, to->m_keyboards, dev); break;
+        case HID_TYPE_POINTER: reassignTypedDevice(from->m_pointers, to->m_pointers, dev); break;
+        case HID_TYPE_TOUCH: reassignTypedDevice(from->m_touches, to->m_touches, dev); break;
+        case HID_TYPE_TABLET: reassignTypedDevice(from->m_tablets, to->m_tablets, dev); break;
+        case HID_TYPE_TABLET_TOOL: reassignTypedDevice(from->m_tabletTools, to->m_tabletTools, dev); break;
+        case HID_TYPE_TABLET_PAD: reassignTypedDevice(from->m_tabletPads, to->m_tabletPads, dev); break;
+        default: break;
+    }
+}
+
+SP<CSeat> CInputManager::assignDeviceToSeat(IHID* dev) {
+    // explicit hl.seat{} assignment wins over udev tags; iterate seat names in a
+    // deterministic order so overlapping configs resolve stably.
+    const auto&                                                           CONFIGS = Config::mgr()->seatConfigs();
+
+    std::vector<const std::pair<const std::string, Config::SSeatConfig>*> ordered;
+    ordered.reserve(CONFIGS.size());
+    for (const auto& entry : CONFIGS) {
+        ordered.emplace_back(&entry);
+    }
+    std::ranges::sort(ordered, [](const auto* a, const auto* b) { return a->first < b->first; });
+
+    SSeatMatchInput input;
+    input.hlName     = dev->m_hlName;
+    input.deviceName = dev->m_deviceName;
+    input.vendor     = dev->m_identity.vendor;
+    input.product    = dev->m_identity.product;
+    input.idPath     = dev->m_identity.idPath;
+    input.serial     = dev->m_identity.serial;
+    input.tags       = &dev->m_deviceTags;
+
+    for (const auto* entry : ordered) {
+        const auto* LIST = seatConfigListFor(entry->second, dev->getType());
+        if (!LIST)
+            continue;
+
+        const bool MATCH = std::ranges::any_of(*LIST, [&input](const auto& m) { return seatMatcherMatches(m, input); });
+        if (MATCH) {
+            dev->m_seat = g_pSeatManager->ensureSeat(entry->first);
+            return dev->m_seat.lock();
+        }
+    }
+
+    // libinput logical seat name from the udev WL_SEAT tag; "default"/"seat0"/empty map to our default seat.
+    dev->m_seat = g_pSeatManager->ensureSeat(logicalSeatName(dev));
+    return dev->m_seat.lock();
+}
+
+void CInputManager::refreshSeatAssignments() {
+    bool changed = false;
+
+    for (const auto& SEAT : g_pSeatManager->seats()) {
+        for (const auto& HID : SEAT->m_hids) {
+            auto DEV = HID.lock();
+            if (!DEV || DEV->getType() == HID_TYPE_UNKNOWN)
+                continue;
+
+            const auto NEWSEAT = assignDeviceToSeat(DEV.get());
+            if (NEWSEAT == SEAT)
+                continue;
+
+            changed = true;
+            moveDeviceToSeat(DEV, SEAT, NEWSEAT);
+        }
+    }
+
+    if (changed)
+        updateCapabilities();
+}
+
 void CInputManager::newKeyboard(SP<IKeyboard> keeb) {
-    const auto PNEWKEYBOARD = seat()->m_keyboards.emplace_back(keeb);
+    setupKeyboard(keeb);
 
-    setupKeyboard(PNEWKEYBOARD);
-
-    Log::logger->log(Log::DEBUG, "New keyboard created, pointers Hypr: {:x}", rc<uintptr_t>(PNEWKEYBOARD.get()));
+    Log::logger->log(Log::DEBUG, "New keyboard created, pointers Hypr: {:x}", rc<uintptr_t>(keeb.get()));
 }
 
 void CInputManager::newKeyboard(SP<Aquamarine::IKeyboard> keyboard) {
-    const auto PNEWKEYBOARD = seat()->m_keyboards.emplace_back(CKeyboard::create(keyboard));
+    setupKeyboard(CKeyboard::create(keyboard));
 
-    setupKeyboard(PNEWKEYBOARD);
-
-    Log::logger->log(Log::DEBUG, "New keyboard created, pointers Hypr: {:x} and AQ: {:x}", rc<uintptr_t>(PNEWKEYBOARD.get()), rc<uintptr_t>(keyboard.get()));
+    Log::logger->log(Log::DEBUG, "New keyboard created, pointers AQ: {:x}", rc<uintptr_t>(keyboard.get()));
 }
 
 void CInputManager::newVirtualKeyboard(SP<CVirtualKeyboardV1Resource> keyboard) {
-    const auto PNEWKEYBOARD = seat()->m_keyboards.emplace_back(CVirtualKeyboard::create(keyboard));
+    setupKeyboard(CVirtualKeyboard::create(keyboard));
 
-    setupKeyboard(PNEWKEYBOARD);
-
-    Log::logger->log(Log::DEBUG, "New virtual keyboard created at {:x}", rc<uintptr_t>(PNEWKEYBOARD.get()));
+    Log::logger->log(Log::DEBUG, "New virtual keyboard created");
 }
 
 void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
     static auto PDPMS = CConfigValue<Config::INTEGER>("misc:key_press_enables_dpms");
-
-    seat()->m_hids.emplace_back(keeb);
 
     try {
         keeb->m_hlName = getNameForNewDevice(keeb->m_deviceName);
@@ -1156,6 +1261,12 @@ void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
         Log::logger->log(Log::ERR, "Keyboard had no name???"); // logic error
     }
 
+    keeb->fillIdentity();
+
+    // register with the resolved owner seat
+    const auto SEAT = assignDeviceToSeat(keeb.get());
+    SEAT->m_keyboards.emplace_back(keeb);
+    SEAT->m_hids.emplace_back(keeb);
     keeb->m_events.destroy.listenStatic([this, keeb = keeb.get()] {
         auto PKEEB = keeb->m_self.lock();
 
@@ -1316,29 +1427,30 @@ void CInputManager::newVirtualMouse(SP<CVirtualPointerV1Resource> mouse) {
 }
 
 void CInputManager::newMouse(SP<IPointer> mouse) {
-    seat()->m_pointers.emplace_back(mouse);
-
     setupMouse(mouse);
 
     Log::logger->log(Log::DEBUG, "New mouse created, pointer Hypr: {:x}", rc<uintptr_t>(mouse.get()));
 }
 
 void CInputManager::newMouse(SP<Aquamarine::IPointer> mouse) {
-    const auto PMOUSE = seat()->m_pointers.emplace_back(CMouse::create(mouse));
-
-    setupMouse(PMOUSE);
+    setupMouse(CMouse::create(mouse));
 
     Log::logger->log(Log::DEBUG, "New mouse created, pointer AQ: {:x}", rc<uintptr_t>(mouse.get()));
 }
 
 void CInputManager::setupMouse(SP<IPointer> mauz) {
-    seat()->m_hids.emplace_back(mauz);
-
     try {
         mauz->m_hlName = getNameForNewDevice(mauz->m_deviceName);
     } catch (std::exception& e) {
         Log::logger->log(Log::ERR, "Mouse had no name???"); // logic error
     }
+
+    mauz->fillIdentity();
+
+    // register with the resolved owner seat
+    const auto SEAT = assignDeviceToSeat(mauz.get());
+    SEAT->m_pointers.emplace_back(mauz);
+    SEAT->m_hids.emplace_back(mauz);
 
     if (mauz->aq() && mauz->aq()->getLibinputHandle()) {
         const auto LIBINPUTDEV = mauz->aq()->getLibinputHandle();
@@ -1557,11 +1669,13 @@ void CInputManager::destroyKeyboard(SP<IKeyboard> pKeyboard) {
     Log::logger->log(Log::DEBUG, "Keyboard at {:x} removed", rc<uintptr_t>(pKeyboard.get()));
 
     Keybinds::mgr()->onDeviceRemoved(pKeyboard);
-    std::erase_if(seat()->m_keyboards, [pKeyboard](const auto& other) { return other == pKeyboard; });
 
-    if (!seat()->m_keyboards.empty()) {
+    const auto SEAT = ownerSeatFor(pKeyboard.get());
+    std::erase_if(SEAT->m_keyboards, [pKeyboard](const auto& other) { return other == pKeyboard; });
+
+    if (!SEAT->m_keyboards.empty()) {
         bool found = false;
-        for (auto const& k : seat()->m_keyboards | std::views::reverse) {
+        for (auto const& k : SEAT->m_keyboards | std::views::reverse) {
             if (!k)
                 continue;
 
@@ -1582,7 +1696,7 @@ void CInputManager::destroyPointer(SP<IPointer> mouse) {
     Log::logger->log(Log::DEBUG, "Pointer at {:x} removed", rc<uintptr_t>(mouse.get()));
 
     Keybinds::mgr()->onDeviceRemoved(mouse);
-    const auto SEAT = seat();
+    const auto SEAT = ownerSeatFor(mouse.get());
     for (auto it = SEAT->m_currentlyHeldButtons.begin(); it != SEAT->m_currentlyHeldButtons.end();) {
         if (it->pointer.lock() != mouse) {
             ++it;
@@ -1605,7 +1719,7 @@ void CInputManager::destroyPointer(SP<IPointer> mouse) {
 void CInputManager::destroyTouchDevice(SP<ITouch> touch) {
     Log::logger->log(Log::DEBUG, "Touch device at {:x} removed", rc<uintptr_t>(touch.get()));
 
-    std::erase_if(seat()->m_touches, [touch](const auto& other) { return other == touch; });
+    std::erase_if(ownerSeatFor(touch.get())->m_touches, [touch](const auto& other) { return other == touch; });
 
     removeFromHIDs(touch);
 }
@@ -1613,7 +1727,7 @@ void CInputManager::destroyTouchDevice(SP<ITouch> touch) {
 void CInputManager::destroyTablet(SP<CTablet> tablet) {
     Log::logger->log(Log::DEBUG, "Tablet device at {:x} removed", rc<uintptr_t>(tablet.get()));
 
-    std::erase_if(seat()->m_tablets, [tablet](const auto& other) { return other == tablet; });
+    std::erase_if(ownerSeatFor(tablet.get())->m_tablets, [tablet](const auto& other) { return other == tablet; });
 
     removeFromHIDs(tablet);
 }
@@ -1621,7 +1735,7 @@ void CInputManager::destroyTablet(SP<CTablet> tablet) {
 void CInputManager::destroyTabletTool(SP<CTabletTool> tool) {
     Log::logger->log(Log::DEBUG, "Tablet tool at {:x} removed", rc<uintptr_t>(tool.get()));
 
-    std::erase_if(seat()->m_tabletTools, [tool](const auto& other) { return other == tool; });
+    std::erase_if(ownerSeatFor(tool.get())->m_tabletTools, [tool](const auto& other) { return other == tool; });
 
     removeFromHIDs(tool);
 }
@@ -1629,7 +1743,7 @@ void CInputManager::destroyTabletTool(SP<CTabletTool> tool) {
 void CInputManager::destroyTabletPad(SP<CTabletPad> pad) {
     Log::logger->log(Log::DEBUG, "Tablet pad at {:x} removed", rc<uintptr_t>(pad.get()));
 
-    std::erase_if(seat()->m_tabletPads, [pad](const auto& other) { return other == pad; });
+    std::erase_if(ownerSeatFor(pad.get())->m_tabletPads, [pad](const auto& other) { return other == pad; });
 
     removeFromHIDs(pad);
 }
@@ -2045,14 +2159,20 @@ void CInputManager::disableAllKeyboards(bool virt) {
 }
 
 void CInputManager::newTouchDevice(SP<Aquamarine::ITouch> pDevice) {
-    const auto PNEWDEV = seat()->m_touches.emplace_back(CTouchDevice::create(pDevice));
-    seat()->m_hids.emplace_back(PNEWDEV);
+    const auto PNEWDEV = CTouchDevice::create(pDevice);
 
     try {
         PNEWDEV->m_hlName = getNameForNewDevice(PNEWDEV->m_deviceName);
     } catch (std::exception& e) {
         Log::logger->log(Log::ERR, "Touch Device had no name???"); // logic error
     }
+
+    PNEWDEV->fillIdentity();
+
+    // register with the resolved owner seat
+    const auto SEAT = assignDeviceToSeat(PNEWDEV.get());
+    SEAT->m_touches.emplace_back(PNEWDEV);
+    SEAT->m_hids.emplace_back(PNEWDEV);
 
     setTouchDeviceConfigs(PNEWDEV);
     Pointer::mgr()->attachTouch(PNEWDEV);
