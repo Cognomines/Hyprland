@@ -109,6 +109,9 @@ namespace Pointer {
         Vector2D& posRefFor(SP<CSeat> seat);
         bool      hasForeignCursors() const;
         void      damageForeignCursor(SP<CSeat> seat, const Vector2D& oldPos);
+        CBox      foreignCursorBoxGlobal(SP<CSeat> seat, std::optional<Vector2D> pos = {});
+        // retires / restores the hardware plane when foreign-cursor activity starts or stops
+        void ensureBackendModeUpdated();
 
         // closest valid point to a given one
         Vector2D closestValid(const Vector2D& pos);
@@ -173,6 +176,9 @@ namespace Pointer {
         SCursorImage m_currentCursorImage; // TODO: support various sizes per-output so we can have pixel-perfect cursors
 
         Vector2D     m_pointerPos = {0, 0};
+
+        // tracks whether the hardware plane was retired for foreign cursors
+        bool m_foreignBackendActive = false;
 
         struct SMonitorPointerState {
             SMonitorPointerState(const PHLMONITOR& m) : monitor(m) {}
