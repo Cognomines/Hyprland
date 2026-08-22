@@ -12,6 +12,7 @@
 #include <tuple>
 
 class IHID;
+class CSeat;
 namespace Render {
     class ITexture;
 }
@@ -42,9 +43,10 @@ namespace Pointer {
         void detachTouch(SP<ITouch> touch);
         void detachTablet(SP<CTablet> tablet);
 
-        // only clamps to the layout.
-        void warpTo(const Vector2D& logical);
-        void move(const Vector2D& deltaLogical);
+// only clamps to the layout. device's owner seat drives its own cursor;
+        // null/default device = the legacy default-seat cursor
+        void warpTo(const Vector2D& logical, SP<IHID> dev = nullptr);
+        void move(const Vector2D& deltaLogical, SP<IHID> dev = nullptr);
         void warpAbsolute(Vector2D abs, SP<IHID> dev, WP<Aquamarine::IOutput> output = {});
 
         void setCursorBuffer(SP<Aquamarine::IBuffer> buf, const Vector2D& hotspot, const float& scale);
@@ -110,6 +112,12 @@ namespace Pointer {
         void applyPendingTransformerMutations();
         bool hasCursor();
         void damageIfSoftware();
+
+        // P4-lite: per-seat cursor support
+        SP<CSeat> seatForDevice(SP<IHID> dev);
+        Vector2D& posRefFor(SP<CSeat> seat);
+        bool      hasForeignCursors() const;
+        void      damageForeignCursor(SP<CSeat> seat, const Vector2D& oldPos);
 
         // closest valid point to a given one
         Vector2D closestValid(const Vector2D& pos);

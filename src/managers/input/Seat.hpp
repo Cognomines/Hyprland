@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "../../defines.hpp"
+#include "../../helpers/math/Math.hpp"
 #include "../../input/Keys.hpp"
 
 class IKeyboard;
@@ -32,6 +33,8 @@ class CSeat {
 
     const std::string& name() const;
     bool               isDefault() const;
+    // true if at least one tracked HID is still alive
+    bool hasLiveDevices() const;
 
     // devices connected to this seat
     std::vector<SP<IKeyboard>>   m_keyboards;
@@ -41,9 +44,9 @@ class CSeat {
     std::vector<SP<CTabletTool>> m_tabletTools;
     std::vector<SP<CTabletPad>>  m_tabletPads;
     // general container for all HID devices connected to this seat
-    std::vector<WP<IHID>>        m_hids;
+    std::vector<WP<IHID>> m_hids;
 
-    uint32_t m_capabilities = 0;
+    uint32_t              m_capabilities = 0;
 
     struct SHeldPointerButton {
         uint32_t     button = 0;
@@ -68,6 +71,11 @@ class CSeat {
     // do not write directly
     std::vector<uint32_t> m_pressed;
     Input::ModifierMask   m_lastMods = Input::HL_MODIFIER_NONE;
+
+    // P4-lite: independent cursor position for non-default seats. The default
+    // seat's position lives in CPointerManager::m_pointerPos.
+    Vector2D m_cursorPos    = {0, 0};
+    bool     m_cursorActive = false;
 
   private:
     std::string m_name;
