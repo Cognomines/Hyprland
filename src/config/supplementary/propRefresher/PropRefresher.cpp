@@ -59,11 +59,12 @@ void CPropRefresher::refreshProp(const bool execdAsScheduled) {
     static auto PBLURENABLED = CConfigValue<Config::BOOL>("decoration:blur:enabled");
 
     if (m_propsTripped & REFRESH_INPUT_DEVICES) {
-        g_pInputManager->setKeyboardLayout();     // update kb layout
-        g_pInputManager->setPointerConfigs();     // update mouse cfgs
-        g_pInputManager->setTouchDeviceConfigs(); // update touch device cfgs
-        g_pInputManager->setTabletConfigs();      // update tablets
-        g_pInputManager->setTabletToolConfigs();  // update tablettools
+        g_pInputManager->refreshSeatAssignments(); // re-resolve device -> seat
+        g_pInputManager->setKeyboardLayout();      // update kb layout
+        g_pInputManager->setPointerConfigs();      // update mouse cfgs
+        g_pInputManager->setTouchDeviceConfigs();  // update touch device cfgs
+        g_pInputManager->setTabletConfigs();       // update tablets
+        g_pInputManager->setTabletToolConfigs();   // update tablettools
     }
 
     if (m_propsTripped & REFRESH_SCREEN_SHADER) {

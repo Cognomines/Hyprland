@@ -10,6 +10,13 @@ SP<CTouchDevice> CTouchDevice::create(SP<Aquamarine::ITouch> touch) {
     return pTouch;
 }
 
+libinput_device* CTouchDevice::libinputHandle() const {
+    const auto TOUCH = m_touch.lock();
+    if (!TOUCH)
+        return nullptr;
+    return TOUCH->getLibinputHandle();
+}
+
 CTouchDevice::CTouchDevice(SP<Aquamarine::ITouch> touch_) : m_touch(touch_) {
     if (!m_touch)
         return;
