@@ -391,10 +391,19 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
 
     // Don't gate leave on m_state.keyboardFocusResource — the WP can
     // be stale. sendLeave no-ops on keyboards without m_currentSurface.
+    // Delivery fallback: also leave resources we may have entered through
+    // another seat when the client had no default-owned resources.
+    wl_client* OLDC = m_state.keyboardFocus ? m_state.keyboardFocus->client() : nullptr;
     for (auto const& k : PROTO::seat->m_keyboards) {
-        if (!k || !resourceOwnedBy(k->m_owner, defaultSeat()))
+        if (!k)
             continue;
-        if (resourceHeldByOtherSeat(this, k->m_owner.lock(), defaultSeat()))
+
+        const bool OWNED    = resourceOwnedBy(k->m_owner, defaultSeat());
+        const auto OWNERRES = k->m_owner.lock();
+        const bool ONOLDCLI = OLDC && OWNERRES && OWNERRES->client() == OLDC;
+        if (!OWNED && !ONOLDCLI)
+            continue;
+        if (!OWNED && resourceHeldByOtherSeat(this, OWNERRES, defaultSeat()))
             continue;
 
         k->sendMods(0, m_keyboard->m_modifiersState.latched, m_keyboard->m_modifiersState.locked, m_keyboard->m_modifiersState.group);
@@ -424,8 +433,23 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
     }
 
     auto client = surf->client();
+
+    // delivery fallback: enter through default-owned resources when the
+    // client has them, else through whatever resources it does have
+    // (e.g. a terminal spawned on seat1 is still usable from the default
+    // seat and vice versa)
+    bool hasOwned = false;
     for (auto const& r : m_seatResources | std::views::reverse) {
-        if (r->resource->client() != client || !resourceOwnedBy(r->resource, defaultSeat()))
+        if (r->resource->client() == client && resourceOwnedBy(r->resource, defaultSeat())) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    for (auto const& r : m_seatResources | std::views::reverse) {
+        if (r->resource->client() != client)
+            continue;
+        if (hasOwned && !resourceOwnedBy(r->resource, defaultSeat()))
             continue;
 
         m_state.keyboardFocusResource = r->resource;
@@ -627,10 +651,19 @@ void CSeatManager::setPointerFocusDefault(SP<CWLSurfaceResource> surf, const Vec
 
     m_listeners.pointerSurfaceDestroy.reset();
 
+    // delivery fallback: also leave resources we may have entered through
+    // another seat when the client had no default-owned resources
+    wl_client* OLDC = m_state.pointerFocus ? m_state.pointerFocus->client() : nullptr;
     for (auto const& p : PROTO::seat->m_pointers) {
-        if (!p || !resourceOwnedBy(p->m_owner, defaultSeat()))
+        if (!p)
             continue;
-        if (resourceHeldByOtherSeat(this, p->m_owner.lock(), defaultSeat()))
+
+        const bool OWNED    = resourceOwnedBy(p->m_owner, defaultSeat());
+        const auto OWNERRES = p->m_owner.lock();
+        const bool ONOLDCLI = OLDC && OWNERRES && OWNERRES->client() == OLDC;
+        if (!OWNED && !ONOLDCLI)
+            continue;
+        if (!OWNED && resourceHeldByOtherSeat(this, OWNERRES, defaultSeat()))
             continue;
 
         p->sendLeave();
@@ -651,8 +684,22 @@ void CSeatManager::setPointerFocusDefault(SP<CWLSurfaceResource> surf, const Vec
     m_state.dndPointerFocus = surf;
 
     auto client = surf->client();
+
+    // delivery fallback: prefer default-owned resources, else use whatever
+    // the client has (e.g. a terminal spawned on seat1 is still usable from
+    // the default seat and vice versa)
+    bool hasOwned = false;
     for (auto const& r : m_seatResources | std::views::reverse) {
-        if (r->resource->client() != client || !resourceOwnedBy(r->resource, defaultSeat()))
+        if (r->resource->client() == client && resourceOwnedBy(r->resource, defaultSeat())) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    for (auto const& r : m_seatResources | std::views::reverse) {
+        if (r->resource->client() != client)
+            continue;
+        if (hasOwned && !resourceOwnedBy(r->resource, defaultSeat()))
             continue;
 
         m_state.pointerFocusResource = r->resource;
