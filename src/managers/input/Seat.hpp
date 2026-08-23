@@ -7,6 +7,7 @@
 
 #include "../../defines.hpp"
 #include "../../helpers/math/Math.hpp"
+#include "../../helpers/signal/Signal.hpp"
 #include "../../input/Keys.hpp"
 
 class IKeyboard;
@@ -16,6 +17,8 @@ class IHID;
 class CTabletTool;
 class CTabletPad;
 class CTablet;
+class CWLSurfaceResource;
+class CWLSeatResource;
 
 inline const std::string DEFAULT_SEAT_NAME = "Hyprland";
 
@@ -76,6 +79,17 @@ class CSeat {
     // seat's position lives in CPointerManager::m_pointerPos.
     Vector2D m_cursorPos    = {0, 0};
     bool     m_cursorActive = false;
+
+    // P3-lite: independent input focus for this seat, mirrored from
+    // CSeatManager::m_state which remains the default seat's focus
+    WP<CWLSurfaceResource> m_keyboardFocus;
+    WP<CWLSeatResource>    m_keyboardFocusResource;
+    WP<CWLSurfaceResource> m_pointerFocus;
+    WP<CWLSeatResource>    m_pointerFocusResource;
+    Vector2D               m_lastPointerLocal = {0, 0};
+
+    CHyprSignalListener    m_kbFocusDestroyListener;
+    CHyprSignalListener    m_ptrFocusDestroyListener;
 
   private:
     std::string m_name;

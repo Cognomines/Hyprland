@@ -15,6 +15,7 @@
 #include "../state/MonitorState.hpp"
 #include "devices/IHID.hpp"
 #include "input/SeatMatching.hpp"
+#include "input/SeatContext.hpp"
 #include "wlr-layer-shell-unstable-v1.hpp"
 #include <algorithm>
 #include <hyprutils/utils/ScopeGuard.hpp>
@@ -211,7 +212,100 @@ void CSeatManager::updateActiveKeyboardData() {
     PROTO::inputCapture->updateKeymap();
 }
 
+// P3-lite: resources bound by clients of seats other than OWNER are skipped,
+// so default-seat focus changes never stomp other seats' enters
+static bool resourceOwnedBy(const WP<CWLSeatResource>& res, SP<CSeat> owner) {
+    const auto SEAT = res ? res->m_owner.lock() : nullptr;
+    if (!SEAT)
+        return !owner || owner->isDefault(); // untagged (shouldn't happen) counts as default
+    return SEAT == owner;
+}
+
+void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf) {
+    if (!seat || seat->isDefault()) {
+        setKeyboardFocusDefault(surf);
+        return;
+    }
+
+    if (surf && seat->m_keyboards.empty()) {
+        Log::logger->log(Log::ERR, "setKeyboardFocus for seat {} without a keyboard", seat->name());
+        return;
+    }
+
+    if (seat->m_keyboardFocus == surf)
+        return;
+
+    seat->m_kbFocusDestroyListener.reset();
+
+    for (auto const& k : PROTO::seat->m_keyboards) {
+        if (!k)
+            continue;
+
+        const auto OWNER = k->m_owner.lock();
+        if (!OWNER || OWNER->m_owner.lock() != seat)
+            continue;
+
+        k->sendMods(0, 0, 0, 0);
+        k->sendLeave();
+    }
+
+    seat->m_keyboardFocusResource.reset();
+    seat->m_keyboardFocus = surf;
+
+    if (!surf) {
+        m_events.keyboardFocusChange.emit();
+        return;
+    }
+
+    wl_array keys;
+    wl_array_init(&keys);
+    CScopeGuard x([&keys] { wl_array_release(&keys); });
+
+    const auto& PRESSED = seat->m_pressed;
+    static_assert(std::is_same_v<std::decay_t<decltype(PRESSED)>::value_type, uint32_t>, "Element type different from keycode type uint32_t");
+
+    const auto PRESSEDARRSIZE = PRESSED.size() * sizeof(uint32_t);
+    if (PRESSEDARRSIZE > 0) {
+        const auto PKEYS = wl_array_add(&keys, PRESSEDARRSIZE);
+        if (PKEYS)
+            std::ranges::copy(PRESSED, sc<uint32_t*>(PKEYS));
+    }
+
+    auto client = surf->client();
+    for (auto const& r : m_seatResources | std::views::reverse) {
+        if (r->resource->client() != client || r->resource->m_owner.lock() != seat)
+            continue;
+
+        seat->m_keyboardFocusResource = r->resource;
+        for (auto const& k : r->resource->m_keyboards) {
+            if (!k)
+                continue;
+
+            k->sendEnter(surf, &keys);
+            uint32_t depressed = 0;
+            uint32_t latched   = 0;
+            uint32_t locked    = 0;
+            for (auto const& kb : seat->m_keyboards) {
+                if (!kb->m_enabled || !kb->shareStates() || (kb->isVirtual() && g_pInputManager->shouldIgnoreVirtualKeyboard(kb)))
+                    continue;
+                depressed |= kb->m_modifiersState.depressed;
+                latched |= kb->m_modifiersState.latched;
+                locked |= kb->m_modifiersState.locked;
+            }
+            k->sendMods(depressed, latched, locked, 0);
+        }
+    }
+
+    seat->m_kbFocusDestroyListener = surf->m_events.destroy.listen([this, seat] { setKeyboardFocus(seat, nullptr); });
+
+    m_events.keyboardFocusChange.emit();
+}
+
 void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
+    setKeyboardFocus(Input::ambientSeat(), surf);
+}
+
+void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
     if (m_state.keyboardFocus == surf)
         return;
 
@@ -225,7 +319,7 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
     // Don't gate leave on m_state.keyboardFocusResource — the WP can
     // be stale. sendLeave no-ops on keyboards without m_currentSurface.
     for (auto const& k : PROTO::seat->m_keyboards) {
-        if (!k)
+        if (!k || !resourceOwnedBy(k->m_owner, defaultSeat()))
             continue;
 
         k->sendMods(0, m_keyboard->m_modifiersState.latched, m_keyboard->m_modifiersState.locked, m_keyboard->m_modifiersState.group);
@@ -256,7 +350,7 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
 
     auto client = surf->client();
     for (auto const& r : m_seatResources | std::views::reverse) {
-        if (r->resource->client() != client)
+        if (r->resource->client() != client || !resourceOwnedBy(r->resource, defaultSeat()))
             continue;
 
         m_state.keyboardFocusResource = r->resource;
@@ -268,7 +362,7 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
             uint32_t depressed = m_keyboard->m_modifiersState.depressed;
             uint32_t latched   = m_keyboard->m_modifiersState.latched;
             uint32_t locked    = m_keyboard->m_modifiersState.locked;
-            for (auto const& kb : g_pInputManager->seat()->m_keyboards) {
+            for (auto const& kb : defaultSeat()->m_keyboards) {
                 if (!kb->m_enabled || !kb->shareStates() || (kb->isVirtual() && g_pInputManager->shouldIgnoreVirtualKeyboard(kb)))
                     continue;
                 depressed |= kb->m_modifiersState.depressed;
@@ -284,12 +378,13 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
     m_events.keyboardFocusChange.emit();
 }
 
-void CSeatManager::sendKeyboardKey(uint32_t timeMs, uint32_t key, wl_keyboard_key_state state_) {
-    if (!m_state.keyboardFocusResource)
+void CSeatManager::sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key, wl_keyboard_key_state state_) {
+    const auto FOCUS = (!seat || seat->isDefault()) ? m_state.keyboardFocusResource.lock() : seat->m_keyboardFocusResource.lock();
+    if (!FOCUS)
         return;
 
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != m_state.keyboardFocusResource->client())
+        if (s->resource->client() != FOCUS->client() || s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& k : s->resource->m_keyboards) {
@@ -301,12 +396,17 @@ void CSeatManager::sendKeyboardKey(uint32_t timeMs, uint32_t key, wl_keyboard_ke
     }
 }
 
-void CSeatManager::sendKeyboardMods(uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
-    if (!m_state.keyboardFocusResource)
+void CSeatManager::sendKeyboardKey(uint32_t timeMs, uint32_t key, wl_keyboard_key_state state) {
+    sendKeyboardKey(Input::ambientSeat(), timeMs, key, state);
+}
+
+void CSeatManager::sendKeyboardMods(SP<CSeat> seat, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
+    const auto FOCUS = (!seat || seat->isDefault()) ? m_state.keyboardFocusResource.lock() : seat->m_keyboardFocusResource.lock();
+    if (!FOCUS)
         return;
 
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != m_state.keyboardFocusResource->client())
+        if (s->resource->client() != FOCUS->client() || s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& k : s->resource->m_keyboards) {
@@ -318,7 +418,78 @@ void CSeatManager::sendKeyboardMods(uint32_t depressed, uint32_t latched, uint32
     }
 }
 
+void CSeatManager::sendKeyboardMods(uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
+    sendKeyboardMods(Input::ambientSeat(), depressed, latched, locked, group);
+}
+
+void CSeatManager::setPointerFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf, const Vector2D& local) {
+    if (!seat || seat->isDefault()) {
+        setPointerFocusDefault(surf, local);
+        return;
+    }
+
+    const bool dndActive = PROTO::data && PROTO::data->dndActive();
+    if (dndActive)
+        return; // foreign seats don't participate in the global dnd focus (P3-lite)
+
+    if (seat->m_pointerFocus == surf)
+        return;
+
+    if (surf && seat->m_pointers.empty()) {
+        Log::logger->log(Log::ERR, "setPointerFocus for seat {} without a pointer", seat->name());
+        return;
+    }
+
+    seat->m_ptrFocusDestroyListener.reset();
+
+    for (auto const& p : PROTO::seat->m_pointers) {
+        if (!p)
+            continue;
+
+        const auto OWNER = p->m_owner.lock();
+        if (!OWNER || OWNER->m_owner.lock() != seat)
+            continue;
+
+        p->sendLeave();
+    }
+
+    auto lastPointerFocusResource = seat->m_pointerFocusResource.lock();
+
+    seat->m_pointerFocusResource.reset();
+    seat->m_pointerFocus = surf;
+
+    if (!surf) {
+        sendPointerFrame(lastPointerFocusResource);
+        return;
+    }
+
+    auto client = surf->client();
+    for (auto const& r : m_seatResources | std::views::reverse) {
+        if (r->resource->client() != client || r->resource->m_owner.lock() != seat)
+            continue;
+
+        seat->m_pointerFocusResource = r->resource;
+        for (auto const& p : r->resource->m_pointers) {
+            if (!p)
+                continue;
+
+            p->sendEnter(surf, local);
+        }
+    }
+
+    if (seat->m_pointerFocusResource != lastPointerFocusResource)
+        sendPointerFrame(lastPointerFocusResource);
+
+    sendPointerFrame(seat);
+
+    seat->m_ptrFocusDestroyListener = surf->m_events.destroy.listen([this, seat] { setPointerFocus(seat, nullptr, {}); });
+}
+
 void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& local) {
+    setPointerFocus(Input::ambientSeat(), surf, local);
+}
+
+void CSeatManager::setPointerFocusDefault(SP<CWLSurfaceResource> surf, const Vector2D& local) {
     const bool dndActive = PROTO::data && PROTO::data->dndActive();
 
     if (m_state.pointerFocus == surf)
@@ -341,7 +512,7 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
     m_listeners.pointerSurfaceDestroy.reset();
 
     for (auto const& p : PROTO::seat->m_pointers) {
-        if (!p)
+        if (!p || !resourceOwnedBy(p->m_owner, defaultSeat()))
             continue;
 
         p->sendLeave();
@@ -363,7 +534,7 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
 
     auto client = surf->client();
     for (auto const& r : m_seatResources | std::views::reverse) {
-        if (r->resource->client() != client)
+        if (r->resource->client() != client || !resourceOwnedBy(r->resource, defaultSeat()))
             continue;
 
         m_state.pointerFocusResource = r->resource;
@@ -386,12 +557,13 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
     m_events.dndPointerFocusChange.emit();
 }
 
-void CSeatManager::sendPointerMotion(uint32_t timeMs, const Vector2D& local) {
-    if (!m_state.pointerFocusResource)
+void CSeatManager::sendPointerMotion(SP<CSeat> seat, uint32_t timeMs, const Vector2D& local) {
+    const auto FOCUS = (!seat || seat->isDefault()) ? m_state.pointerFocusResource.lock() : seat->m_pointerFocusResource.lock();
+    if (!FOCUS)
         return;
 
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != m_state.pointerFocusResource->client())
+        if (s->resource->client() != FOCUS->client() || s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& p : s->resource->m_pointers) {
@@ -402,15 +574,24 @@ void CSeatManager::sendPointerMotion(uint32_t timeMs, const Vector2D& local) {
         }
     }
 
-    m_lastLocalCoords = local;
+    if (!seat || seat->isDefault())
+        m_lastLocalCoords = local;
 }
 
-void CSeatManager::sendPointerButton(uint32_t timeMs, uint32_t key, wl_pointer_button_state state_) {
-    if (!m_state.pointerFocusResource || (PROTO::data && PROTO::data->dndActive()))
+void CSeatManager::sendPointerMotion(uint32_t timeMs, const Vector2D& local) {
+    sendPointerMotion(Input::ambientSeat(), timeMs, local);
+}
+
+void CSeatManager::sendPointerButton(SP<CSeat> seat, uint32_t timeMs, uint32_t key, wl_pointer_button_state state_) {
+    if (PROTO::data && PROTO::data->dndActive())
+        return;
+
+    const auto FOCUS = (!seat || seat->isDefault()) ? m_state.pointerFocusResource.lock() : seat->m_pointerFocusResource.lock();
+    if (!FOCUS)
         return;
 
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != m_state.pointerFocusResource->client())
+        if (s->resource->client() != FOCUS->client() || s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& p : s->resource->m_pointers) {
@@ -422,11 +603,17 @@ void CSeatManager::sendPointerButton(uint32_t timeMs, uint32_t key, wl_pointer_b
     }
 }
 
-void CSeatManager::sendPointerFrame() {
-    if (!m_state.pointerFocusResource)
-        return;
+void CSeatManager::sendPointerButton(uint32_t timeMs, uint32_t key, wl_pointer_button_state state) {
+    sendPointerButton(Input::ambientSeat(), timeMs, key, state);
+}
 
-    sendPointerFrame(m_state.pointerFocusResource);
+void CSeatManager::sendPointerFrame() {
+    sendPointerFrame(Input::ambientSeat());
+}
+
+void CSeatManager::sendPointerFrame(SP<CSeat> seat) {
+    const auto FOCUS = (!seat || seat->isDefault()) ? m_state.pointerFocusResource.lock() : seat->m_pointerFocusResource.lock();
+    sendPointerFrame(FOCUS);
 }
 
 void CSeatManager::sendPointerFrame(WP<CWLSeatResource> pResource) {
@@ -446,13 +633,14 @@ void CSeatManager::sendPointerFrame(WP<CWLSeatResource> pResource) {
     }
 }
 
-void CSeatManager::sendPointerAxis(uint32_t timeMs, wl_pointer_axis axis, double value, int32_t discrete, int32_t value120, wl_pointer_axis_source source,
+void CSeatManager::sendPointerAxis(SP<CSeat> seat, uint32_t timeMs, wl_pointer_axis axis, double value, int32_t discrete, int32_t value120, wl_pointer_axis_source source,
                                    wl_pointer_axis_relative_direction relative) {
-    if (!m_state.pointerFocusResource)
+    const auto FOCUS = (!seat || seat->isDefault()) ? m_state.pointerFocusResource.lock() : seat->m_pointerFocusResource.lock();
+    if (!FOCUS)
         return;
 
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != m_state.pointerFocusResource->client())
+        if (s->resource->client() != FOCUS->client() || s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& p : s->resource->m_pointers) {
@@ -472,6 +660,11 @@ void CSeatManager::sendPointerAxis(uint32_t timeMs, wl_pointer_axis axis, double
                 p->sendAxisStop(timeMs, axis);
         }
     }
+}
+
+void CSeatManager::sendPointerAxis(uint32_t timeMs, wl_pointer_axis axis, double value, int32_t discrete, int32_t value120, wl_pointer_axis_source source,
+                                   wl_pointer_axis_relative_direction relative) {
+    sendPointerAxis(Input::ambientSeat(), timeMs, axis, value, discrete, value120, source, relative);
 }
 
 void CSeatManager::sendTouchDown(SP<CWLSurfaceResource> surf, uint32_t timeMs, int32_t id, const Vector2D& local) {

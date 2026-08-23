@@ -54,35 +54,53 @@ class CSeatManager {
     // libinput's "default"/"seat0" names and the empty string map to the default seat.
     SP<CSeat> ensureSeat(const std::string& name);
 
-    void                    updateCapabilities(uint32_t capabilities); // in IHID caps
+    void      updateCapabilities(uint32_t capabilities); // in IHID caps
 
-    void                    setMouse(SP<IPointer> mouse);
-    void                    setKeyboard(SP<IKeyboard> keeb);
-    void                    updateActiveKeyboardData(); // updates the clients with the keymap and repeat info
+    void      setMouse(SP<IPointer> mouse);
+    void      setKeyboard(SP<IKeyboard> keeb);
+    void      updateActiveKeyboardData(); // updates the clients with the keymap and repeat info
 
-    void                    setKeyboardFocus(SP<CWLSurfaceResource> surf);
-    void                    sendKeyboardKey(uint32_t timeMs, uint32_t key, wl_keyboard_key_state state);
-    void                    sendKeyboardMods(uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group);
+    // P3-lite: seat-scoped focus and event delivery. The unscoped variants
+    // resolve SP<CSeat> through Input::ambientSeat(); the default seat's
+    // state remains CSeatManager::m_state, other seats use CSeat fields.
+    void setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf);
+    void sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key, wl_keyboard_key_state state);
+    void sendKeyboardMods(SP<CSeat> seat, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group);
 
-    void                    setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& local);
-    void                    sendPointerMotion(uint32_t timeMs, const Vector2D& local);
-    void                    sendPointerButton(uint32_t timeMs, uint32_t key, wl_pointer_button_state state);
-    void                    sendPointerFrame();
-    void                    sendPointerFrame(WP<CWLSeatResource> pResource);
-    void                    sendPointerAxis(uint32_t timeMs, wl_pointer_axis axis, double value, int32_t discrete, int32_t value120, wl_pointer_axis_source source,
-                                            wl_pointer_axis_relative_direction relative);
+    void setPointerFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf, const Vector2D& local);
+    void sendPointerMotion(SP<CSeat> seat, uint32_t timeMs, const Vector2D& local);
+    void sendPointerButton(SP<CSeat> seat, uint32_t timeMs, uint32_t key, wl_pointer_button_state state);
+    void sendPointerFrame(SP<CSeat> seat);
+    void sendPointerAxis(SP<CSeat> seat, uint32_t timeMs, wl_pointer_axis axis, double value, int32_t discrete, int32_t value120, wl_pointer_axis_source source,
+                         wl_pointer_axis_relative_direction relative);
 
-    void                    sendTouchDown(SP<CWLSurfaceResource> surf, uint32_t timeMs, int32_t id, const Vector2D& local);
-    void                    sendTouchUp(uint32_t timeMs, int32_t id);
-    void                    sendTouchMotion(uint32_t timeMs, int32_t id, const Vector2D& local);
-    void                    sendTouchFrame();
-    void                    sendTouchCancel();
-    void                    sendTouchShape(int32_t id, const Vector2D& shape);
-    void                    sendTouchOrientation(int32_t id, double angle);
+    void setKeyboardFocus(SP<CWLSurfaceResource> surf);
+    void sendKeyboardKey(uint32_t timeMs, uint32_t key, wl_keyboard_key_state state);
+    void sendKeyboardMods(uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group);
 
-    void                    resendEnterEvents();
+    // legacy default-seat implementations backing m_state; do not call directly
+    void     setKeyboardFocusDefault(SP<CWLSurfaceResource> surf);
+    void     setPointerFocusDefault(SP<CWLSurfaceResource> surf, const Vector2D& local);
 
-    uint32_t                nextSerial(SP<CWLSeatResource> seatResource, bool enter = false);
+    void     setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& local);
+    void     sendPointerMotion(uint32_t timeMs, const Vector2D& local);
+    void     sendPointerButton(uint32_t timeMs, uint32_t key, wl_pointer_button_state state);
+    void     sendPointerFrame();
+    void     sendPointerFrame(WP<CWLSeatResource> pResource);
+    void     sendPointerAxis(uint32_t timeMs, wl_pointer_axis axis, double value, int32_t discrete, int32_t value120, wl_pointer_axis_source source,
+                             wl_pointer_axis_relative_direction relative);
+
+    void     sendTouchDown(SP<CWLSurfaceResource> surf, uint32_t timeMs, int32_t id, const Vector2D& local);
+    void     sendTouchUp(uint32_t timeMs, int32_t id);
+    void     sendTouchMotion(uint32_t timeMs, int32_t id, const Vector2D& local);
+    void     sendTouchFrame();
+    void     sendTouchCancel();
+    void     sendTouchShape(int32_t id, const Vector2D& shape);
+    void     sendTouchOrientation(int32_t id, double angle);
+
+    void     resendEnterEvents();
+
+    uint32_t nextSerial(SP<CWLSeatResource> seatResource, bool enter = false);
     // pops the serial if it was valid, meaning it is consumed.
     bool                serialValid(SP<CWLSeatResource> seatResource, uint32_t serial, bool erase = true);
     void                recordPointerButtonSerial(SP<CWLSeatResource> seatResource, uint32_t serial, SP<CWLSurfaceResource> surface, uint32_t button);

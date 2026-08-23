@@ -1,7 +1,10 @@
 #include "SeatContext.hpp"
 #include "../SeatManager.hpp"
+#include "PidSeatRegistry.hpp"
 
 #include <vector>
+
+#include <wayland-server-core.h>
 
 namespace Input {
     namespace {
@@ -28,4 +31,20 @@ namespace Input {
         if (!stack.empty())
             stack.pop_back();
     };
+
+    SP<CSeat> seatForClient(wl_client* client) {
+        pid_t pid = 0;
+        wl_client_get_credentials(client, &pid, nullptr, nullptr);
+
+        const auto NAME = pidSeatRegistry()->peekFor(pid);
+        if (!NAME)
+            return g_pSeatManager->defaultSeat();
+
+        for (auto const& s : g_pSeatManager->seats()) {
+            if (s->name() == *NAME)
+                return s;
+        }
+
+        return g_pSeatManager->defaultSeat();
+    }
 }

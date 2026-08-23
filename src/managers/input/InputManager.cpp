@@ -472,7 +472,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     g_layoutManager->moveMouse(getMouseCoordsInternal());
 
     if (g_layoutManager->dragController()->exclusiveDeviceGrab()) {
-        g_pSeatManager->setPointerFocus(nullptr, {});
+        g_pSeatManager->setPointerFocus(SEAT, nullptr, {});
         return;
     }
 
@@ -630,9 +630,9 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             m_emptyFocusCursorSet = true;
         }
 
-        g_pSeatManager->setPointerFocus(nullptr, {});
+        g_pSeatManager->setPointerFocus(SEAT, nullptr, {});
 
-        if (refocus || !Desktop::focusState()->window()) // if we are forcing a refocus, and we don't find a surface, clear the kb focus too!
+        if (SEAT->isDefault() && (refocus || !Desktop::focusState()->window())) // if we are forcing a refocus, and we don't find a surface, clear the kb focus too!
             Desktop::focusState()->rawWindowFocus(nullptr, FOCUS_REASON);
 
         return;
@@ -659,6 +659,15 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         m_foundLSToFocus      = pFoundLayerSurface;
         m_foundWindowToFocus  = pFoundWindow;
         m_foundSurfaceToFocus = foundSurface;
+    }
+
+    // P3-lite: non-default seats track their own keyboard and pointer focus
+    // without touching the global focus state — decorations, monitors and
+    // workspaces stay driven by the default seat until full Phase 3.
+    if (!SEAT->isDefault()) {
+        g_pSeatManager->setKeyboardFocus(SEAT, foundSurface);
+        g_pSeatManager->setPointerFocus(SEAT, foundSurface, surfaceLocal);
+        return;
     }
 
     if (g_layoutManager->dragController()->target() && (!pFoundWindow || pFoundWindow->layoutTarget() != g_layoutManager->dragController()->target())) {
@@ -1905,7 +1914,7 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
                 SEAT->m_pressed.emplace_back(event.keycode);
 
             g_pSeatManager->setKeyboard(pKeyboard);
-            g_pSeatManager->sendKeyboardKey(event.timeMs, event.keycode, state);
+            g_pSeatManager->sendKeyboardKey(SEAT, event.timeMs, event.keycode, state);
         }
 
         updateKeyboardsLeds(pKeyboard);
@@ -1948,7 +1957,7 @@ void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
         IME->sendMods(MODS.depressed, MODS.latched, MODS.locked, MODS.group);
     } else {
         g_pSeatManager->setKeyboard(pKeyboard);
-        g_pSeatManager->sendKeyboardMods(MODS.depressed, MODS.latched, MODS.locked, MODS.group);
+        g_pSeatManager->sendKeyboardMods(SEAT, MODS.depressed, MODS.latched, MODS.locked, MODS.group);
     }
 
     updateKeyboardsLeds(pKeyboard);
