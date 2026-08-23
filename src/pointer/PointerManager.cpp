@@ -109,6 +109,10 @@ Vector2D CPointerManager::position() {
     return m_pointerPos;
 }
 
+Vector2D CPointerManager::position(SP<CSeat> seat) {
+    return posRefFor(seat);
+}
+
 Vector2D CPointerManager::hotspot() {
     return m_currentCursorImage.hotspot;
 }
@@ -727,6 +731,10 @@ void CPointerManager::renderSoftwareCursorsFor(PHLMONITOR pMonitor, const Time::
     if (screencopy && !forceRender && (state->hardwareFailed || state->softwareLocks != 0))
         return;
 
+    auto texture = getCurrentCursorTexture();
+    if (!texture)
+        return;
+
     auto box = state->box.copy();
     if (overridePos.has_value()) {
         box.x = overridePos->x;
@@ -735,24 +743,28 @@ void CPointerManager::renderSoftwareCursorsFor(PHLMONITOR pMonitor, const Time::
         box.translate(-m_currentCursorImage.hotspot);
     }
 
-    if (box.intersection(CBox{{}, {pMonitor->m_size}}).empty())
-        return;
+    // P4-lite: the default cursor only draws on the monitor it currently
+    // occupies; every foreign seat's cursor is checked against this monitor
+    // independently below, so it can travel across all monitors.
+    if (!box.intersection(CBox{{}, {pMonitor->m_size}}).empty()) {
+        const auto logicalBox = box.copy();
 
-    auto texture = getCurrentCursorTexture();
-    if (!texture)
-        return;
+        box.scale(pMonitor->m_scale);
+        box.x = std::round(box.x);
+        box.y = std::round(box.y);
 
-    const auto logicalBox = box.copy();
+        CTexPassElement::SRenderData data;
+        data.tex = texture;
+        data.box = box.round();
 
-    box.scale(pMonitor->m_scale);
-    box.x = std::round(box.x);
-    box.y = std::round(box.y);
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(data)));
 
-    CTexPassElement::SRenderData data;
-    data.tex = texture;
-    data.box = box.round();
-
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(data)));
+        // to erase the leftover in updateCursorBackend()
+        if (!screencopy) {
+            state->swRendered    = true;
+            state->swRenderedBox = logicalBox;
+        }
+    }
 
     // P4-lite: draw every other active seat's cursor with the same image
     for (auto const& s : g_pSeatManager->seats()) {
@@ -773,12 +785,6 @@ void CPointerManager::renderSoftwareCursorsFor(PHLMONITOR pMonitor, const Time::
         sdata.box = sbox.round();
 
         g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(sdata)));
-    }
-
-    // to erase the leftover in updateCursorBackend()
-    if (!screencopy) {
-        state->swRendered    = true;
-        state->swRenderedBox = logicalBox;
     }
 
     if (m_currentCursorImage.surface)

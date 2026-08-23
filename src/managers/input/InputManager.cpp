@@ -137,7 +137,9 @@ CInputManager::~CInputManager() {
     m_switches.clear();
 }
 
-void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
+static SP<CSeat> ownerSeatFor(IHID* dev);
+
+void             CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
     static auto PNOACCEL = CConfigValue<Config::INTEGER>("input:force_no_accel");
 
     Vector2D    delta   = e.delta;
@@ -170,7 +172,12 @@ void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
     if (PROTO::inputCapture->isCaptured())
         return;
 
-    mouseMoveUnified(e.timeMs, false, e.mouse);
+    {
+        // hover hit-testing follows the triggering device's owner seat, so
+        // independent cursors resolve surfaces and monitors independently
+        const Input::SScopedAmbientSeat SCOPE{ownerSeatFor(e.device.get())};
+        mouseMoveUnified(e.timeMs, false, e.mouse);
+    }
 
     m_lastCursorMovement.reset();
 
@@ -186,7 +193,10 @@ void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
 void CInputManager::onMouseWarp(IPointer::SMotionAbsoluteEvent e) {
     Pointer::mgr()->warpAbsolute(e.absolute, e.device);
 
-    mouseMoveUnified(e.timeMs);
+    {
+        const Input::SScopedAmbientSeat SCOPE{ownerSeatFor(e.device.get())};
+        mouseMoveUnified(e.timeMs);
+    }
 
     m_lastCursorMovement.reset();
 
@@ -753,6 +763,10 @@ void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) 
     if (info.cancelled)
         return;
 
+    // held-button state, click hit-testing and refocus resolve through the
+    // triggering device's owner seat, keeping clicks independent per seat
+    const Input::SScopedAmbientSeat SCOPE{ownerSeatFor(mouse.get())};
+
     if (e.mouse)
         recheckMouseWarpOnMouseInput();
 
@@ -1002,6 +1016,9 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e, SP<IPointer> pointer) {
     if (info.cancelled)
         return;
 
+    // scroll targets resolve under the triggering device's owner seat
+    const Input::SScopedAmbientSeat SCOPE{ownerSeatFor(pointer.get())};
+
     if (e.mouse)
         recheckMouseWarpOnMouseInput();
 
@@ -1122,7 +1139,7 @@ void CInputManager::onPointerFrame() {
 }
 
 Vector2D CInputManager::getMouseCoordsInternal() {
-    return Pointer::mgr()->position();
+    return Pointer::mgr()->position(Input::ambientSeat());
 }
 
 // libinput logical seat name, e.g. from a udev WL_SEAT tag; empty when unavailable
@@ -1141,8 +1158,10 @@ static std::string logicalSeatName(IHID* dev) {
 
 // the seat a device currently belongs to, falling back to the default seat
 static SP<CSeat> ownerSeatFor(IHID* dev) {
-    if (const auto SEAT = dev->m_seat.lock(); SEAT)
-        return SEAT;
+    if (dev) {
+        if (const auto SEAT = dev->m_seat.lock(); SEAT)
+            return SEAT;
+    }
 
     return g_pSeatManager->defaultSeat();
 }
