@@ -647,6 +647,9 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             s->m_focusWindow.reset();
             s->m_hoverWindow.reset();
 
+            Log::logger->log(Log::INFO, "[seatmgr] clearing hover/focus for seat '{}' (prev focus {}, prev hover {})", s->name(), sc<const void*>(PREVFOCUS.get()),
+                             sc<const void*>(PREVHOVER.get()));
+
             // activated stays on if another seat still holds keyboard focus
             if (PREVFOCUS) {
                 PREVFOCUS->presentation().updateDecorations();
@@ -699,6 +702,9 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             SEAT->m_focusWindow = pFoundWindow;
             SEAT->m_hoverWindow = pFoundWindow;
 
+            Log::logger->log(Log::INFO, "[seatmgr] hover for seat '{}' -> {} (prev focus {}, prev hover {})", SEAT->name(), sc<const void*>(pFoundWindow.get()),
+                             sc<const void*>(PREVFOCUS.get()), sc<const void*>(PREVHOVER.get()));
+
             // xdg_toplevel activated is a union over seats: activate what this
             // seat focused, deactivate what it left (the backend keeps the
             // window activated if another seat still holds keyboard focus)
@@ -719,6 +725,8 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     if (g_pSeatManager->defaultSeat()->m_hoverWindow.lock() != pFoundWindow) {
         const auto PREVHOVER                         = g_pSeatManager->defaultSeat()->m_hoverWindow.lock();
         g_pSeatManager->defaultSeat()->m_hoverWindow = pFoundWindow;
+
+        Log::logger->log(Log::INFO, "[seatmgr] default hover {} -> {}", sc<const void*>(PREVHOVER.get()), sc<const void*>(pFoundWindow.get()));
 
         if (PREVHOVER)
             PREVHOVER->presentation().updateDecorations();
@@ -1311,6 +1319,7 @@ void CInputManager::refreshSeatAssignments() {
                 continue;
 
             changed = true;
+            Log::logger->log(Log::INFO, "[seatmgr] device '{}' moved: seat '{}' -> '{}'", DEV->m_deviceName, SEAT->name(), NEWSEAT->name());
             moveDeviceToSeat(DEV, SEAT, NEWSEAT);
         }
     }
@@ -1352,6 +1361,7 @@ void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
     const auto SEAT = assignDeviceToSeat(keeb.get());
     SEAT->m_keyboards.emplace_back(keeb);
     SEAT->m_hids.emplace_back(keeb);
+    Log::logger->log(Log::INFO, "[seatmgr] keyboard '{}' ({}) -> seat '{}'", keeb->m_deviceName, keeb->m_hlName, SEAT->name());
     keeb->m_events.destroy.listenStatic([this, keeb = keeb.get()] {
         auto PKEEB = keeb->m_self.lock();
 
@@ -1536,6 +1546,7 @@ void CInputManager::setupMouse(SP<IPointer> mauz) {
     const auto SEAT = assignDeviceToSeat(mauz.get());
     SEAT->m_pointers.emplace_back(mauz);
     SEAT->m_hids.emplace_back(mauz);
+    Log::logger->log(Log::INFO, "[seatmgr] pointer '{}' ({}) -> seat '{}'", mauz->m_deviceName, mauz->m_hlName, SEAT->name());
 
     if (mauz->aq() && mauz->aq()->getLibinputHandle()) {
         const auto LIBINPUTDEV = mauz->aq()->getLibinputHandle();
@@ -1958,6 +1969,8 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
         } else {
             const auto SEAT     = ownerSeatFor(pKeyboard.get());
             const auto CONTAINS = std::ranges::contains(SEAT->m_pressed, event.keycode);
+
+            Log::logger->log(Log::DEBUG, "[seatmgr] key {} {} via device '{}' -> seat '{}'", event.keycode, pressed ? "press" : "release", pKeyboard->m_deviceName, SEAT->name());
 
             if (CONTAINS && pressed)
                 return;

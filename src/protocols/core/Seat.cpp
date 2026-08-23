@@ -566,6 +566,13 @@ void CWLSeatProtocol::bindManager(wl_client* client, void* data, uint32_t ver, u
     // focus and event delivery can filter by owner
     RESOURCE->m_owner = Input::seatForClient(client);
 
+    pid_t pid = 0;
+    wl_client_get_credentials(client, &pid, nullptr, nullptr);
+    if (RESOURCE->m_owner)
+        LOGM(Log::INFO, "[seatmgr] client pid {} bound wl_seat -> seat '{}'", pid, RESOURCE->m_owner->name());
+    else
+        LOGM(Log::INFO, "[seatmgr] client pid {} bound wl_seat -> UNTAGGED", pid);
+
     LOGM(Log::DEBUG, "New seat resource bound at {:x}", (uintptr_t)RESOURCE.get());
 
     m_events.newSeatResource.emit(RESOURCE);
