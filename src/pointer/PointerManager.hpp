@@ -70,7 +70,8 @@ namespace Pointer {
 
         //
         Vector2D position();
-        Vector2D untransformedPosition() const;
+Vector2D untransformedPosition() const;
+        Vector2D position(SP<CSeat> seat = nullptr); // position of a specific seat's cursor, legacy global pos for the default seat
         Vector2D hotspot();
         Vector2D cursorSizeLogical();
 
