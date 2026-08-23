@@ -18,6 +18,7 @@
 #include "devices/IHID.hpp"
 #include "input/SeatMatching.hpp"
 #include "input/SeatContext.hpp"
+#include "../helpers/time/Time.hpp"
 #include "wlr-layer-shell-unstable-v1.hpp"
 #include <algorithm>
 #include <hyprutils/utils/ScopeGuard.hpp>
@@ -243,6 +244,24 @@ static bool resourceHeldByOtherSeat(CSeatManager* mgr, const WP<CWLSeatResource>
     return false;
 }
 
+// A keydown delivered to a client must always be answered by a keyup on the
+// same client even after focus moved elsewhere, or the client repeats the key
+// forever. Synthesize releases for keys this seat still holds before its
+// keyboards leave a resource, and forget them (the eventual physical release
+// is dropped by the press/release dedup instead of double-delivered).
+static void sendSyntheticKeyReleases(const SP<CSeat>& seat, const WP<CWLKeyboardResource>& k) {
+    const auto KB = k.lock();
+    if (!KB || seat->m_pressed.empty())
+        return;
+
+    const auto TIME = sc<uint32_t>(Time::millis(Time::steadyNow()));
+    for (auto const& code : seat->m_pressed) {
+        Log::logger->log(Log::DEBUG, "[seatmgr] synth key release {} on kb leave", code);
+        KB->sendKey(TIME, code, WL_KEYBOARD_KEY_STATE_RELEASED);
+    }
+    seat->m_pressed.clear();
+}
+
 void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf) {
     if (!seat || seat->isDefault()) {
         setKeyboardFocusDefault(surf);
@@ -274,6 +293,7 @@ void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf)
             if (!k)
                 continue;
 
+            sendSyntheticKeyReleases(seat, k);
             k->sendMods(0, 0, 0, 0);
             k->sendLeave();
         }
@@ -414,6 +434,7 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
         if (!OWNED)
             Log::logger->log(Log::INFO, "[seatmgr] default kb leave via delivery fallback");
 
+        sendSyntheticKeyReleases(defaultSeat(), k);
         k->sendMods(0, m_keyboard->m_modifiersState.latched, m_keyboard->m_modifiersState.locked, m_keyboard->m_modifiersState.group);
         k->sendLeave();
     }
