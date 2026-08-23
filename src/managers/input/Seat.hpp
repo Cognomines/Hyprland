@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "../../defines.hpp"
+#include "../../desktop/DesktopTypes.hpp"
 #include "../../helpers/math/Math.hpp"
 #include "../../helpers/signal/Signal.hpp"
 #include "../../input/Keys.hpp"
@@ -87,9 +88,13 @@ class CSeat {
     WP<CWLSurfaceResource> m_pointerFocus;
     WP<CWLSeatResource>    m_pointerFocusResource;
     Vector2D               m_lastPointerLocal = {0, 0};
+    // window focused by this seat's keyboard, drives per-seat border colors
+    PHLWINDOWREF m_focusWindow;
+    // window this seat's cursor currently hovers, drives per-seat borders
+    PHLWINDOWREF        m_hoverWindow;
 
-    CHyprSignalListener    m_kbFocusDestroyListener;
-    CHyprSignalListener    m_ptrFocusDestroyListener;
+    CHyprSignalListener m_kbFocusDestroyListener;
+    CHyprSignalListener m_ptrFocusDestroyListener;
 
   private:
     std::string m_name;

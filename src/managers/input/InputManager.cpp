@@ -632,6 +632,27 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
 
         g_pSeatManager->setPointerFocus(SEAT, nullptr, {});
 
+        // P3-lite: cursor left every surface — drop per-seat window tracking
+        // so borders stop lingering on the last touched window
+        for (auto const& s : g_pSeatManager->seats()) {
+            if (!s)
+                continue;
+
+            const auto PREVFOCUS = s->m_focusWindow.lock();
+            const auto PREVHOVER = s->m_hoverWindow.lock();
+
+            if (!PREVFOCUS && !PREVHOVER)
+                continue;
+
+            s->m_focusWindow.reset();
+            s->m_hoverWindow.reset();
+
+            if (PREVFOCUS)
+                PREVFOCUS->presentation().updateDecorations();
+            if (PREVHOVER && PREVHOVER != PREVFOCUS)
+                PREVHOVER->presentation().updateDecorations();
+        }
+
         if (SEAT->isDefault() && (refocus || !Desktop::focusState()->window())) // if we are forcing a refocus, and we don't find a surface, clear the kb focus too!
             Desktop::focusState()->rawWindowFocus(nullptr, FOCUS_REASON);
 
@@ -667,7 +688,34 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     if (!SEAT->isDefault()) {
         g_pSeatManager->setKeyboardFocus(SEAT, foundSurface);
         g_pSeatManager->setPointerFocus(SEAT, foundSurface, surfaceLocal);
+
+        // refresh borders when this seat's presence or focus changes
+        const auto PREVFOCUS = SEAT->m_focusWindow.lock();
+        const auto PREVHOVER = SEAT->m_hoverWindow.lock();
+        if (PREVFOCUS != pFoundWindow || PREVHOVER != pFoundWindow) {
+            SEAT->m_focusWindow = pFoundWindow;
+            SEAT->m_hoverWindow = pFoundWindow;
+
+            if (PREVFOCUS && PREVFOCUS != pFoundWindow)
+                PREVFOCUS->presentation().updateDecorations();
+            if (PREVHOVER && PREVHOVER != pFoundWindow && PREVHOVER != PREVFOCUS)
+                PREVHOVER->presentation().updateDecorations();
+            if (pFoundWindow)
+                pFoundWindow->presentation().updateDecorations();
+        }
+
         return;
+    }
+
+    // track the default seat's hovered window for per-seat border colors
+    if (g_pSeatManager->defaultSeat()->m_hoverWindow.lock() != pFoundWindow) {
+        const auto PREVHOVER                         = g_pSeatManager->defaultSeat()->m_hoverWindow.lock();
+        g_pSeatManager->defaultSeat()->m_hoverWindow = pFoundWindow;
+
+        if (PREVHOVER)
+            PREVHOVER->presentation().updateDecorations();
+        if (pFoundWindow)
+            pFoundWindow->presentation().updateDecorations();
     }
 
     if (g_layoutManager->dragController()->target() && (!pFoundWindow || pFoundWindow->layoutTarget() != g_layoutManager->dragController()->target())) {

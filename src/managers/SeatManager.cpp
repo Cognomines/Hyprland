@@ -221,6 +221,26 @@ static bool resourceOwnedBy(const WP<CWLSeatResource>& res, SP<CSeat> owner) {
     return SEAT == owner;
 }
 
+// P3-lite delivery fallback: true when another seat currently drives this
+// resource through a fallback enter — its owner must not sendLeave() and
+// break that seat's focus
+static bool resourceHeldByOtherSeat(CSeatManager* mgr, const WP<CWLSeatResource>& res, const SP<CSeat>& self) {
+    if (!res)
+        return false;
+
+    for (auto const& s : mgr->seats()) {
+        if (!s || s == self)
+            continue;
+
+        const bool KB = s->m_keyboardFocusResource.lock() == res && s->m_keyboardFocus;
+        const bool PT = s->m_pointerFocusResource.lock() == res && s->m_pointerFocus;
+        if (KB || PT)
+            return true;
+    }
+
+    return false;
+}
+
 void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf) {
     if (!seat || seat->isDefault()) {
         setKeyboardFocusDefault(surf);
@@ -237,16 +257,24 @@ void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf)
 
     seat->m_kbFocusDestroyListener.reset();
 
-    for (auto const& k : PROTO::seat->m_keyboards) {
-        if (!k)
+    // P3-lite delivery fallback: leave resources owned by this seat, plus
+    // any resource we may have entered through another seat when the client
+    // had no seat-owned resources; sendLeave() no-ops elsewhere
+    wl_client* OLDC = seat->m_keyboardFocus ? seat->m_keyboardFocus->client() : nullptr;
+    for (auto const& r : m_seatResources) {
+        const bool OWNED = r->resource->m_owner.lock() == seat;
+        if (!OWNED && (!OLDC || r->resource->client() != OLDC))
+            continue;
+        if (!OWNED && r->resource->m_owner.lock() && r->resource->m_owner.lock()->isDefault() && resourceHeldByOtherSeat(this, r->resource, seat))
             continue;
 
-        const auto OWNER = k->m_owner.lock();
-        if (!OWNER || OWNER->m_owner.lock() != seat)
-            continue;
+        for (auto const& k : r->resource->m_keyboards) {
+            if (!k)
+                continue;
 
-        k->sendMods(0, 0, 0, 0);
-        k->sendLeave();
+            k->sendMods(0, 0, 0, 0);
+            k->sendLeave();
+        }
     }
 
     seat->m_keyboardFocusResource.reset();
@@ -272,8 +300,22 @@ void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf)
     }
 
     auto client = surf->client();
+
+    // enter through this seat's own resources when the client has them,
+    // falling back to whatever it does have (e.g. a bar spawned on the
+    // default seat is still clickable/typable from other seats)
+    bool hasOwned = false;
     for (auto const& r : m_seatResources | std::views::reverse) {
-        if (r->resource->client() != client || r->resource->m_owner.lock() != seat)
+        if (r->resource->client() == client && r->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    for (auto const& r : m_seatResources | std::views::reverse) {
+        if (r->resource->client() != client)
+            continue;
+        if (hasOwned && r->resource->m_owner.lock() != seat)
             continue;
 
         seat->m_keyboardFocusResource = r->resource;
@@ -320,6 +362,8 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
     // be stale. sendLeave no-ops on keyboards without m_currentSurface.
     for (auto const& k : PROTO::seat->m_keyboards) {
         if (!k || !resourceOwnedBy(k->m_owner, defaultSeat()))
+            continue;
+        if (resourceHeldByOtherSeat(this, k->m_owner.lock(), defaultSeat()))
             continue;
 
         k->sendMods(0, m_keyboard->m_modifiersState.latched, m_keyboard->m_modifiersState.locked, m_keyboard->m_modifiersState.group);
@@ -383,8 +427,21 @@ void CSeatManager::sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key
     if (!FOCUS)
         return;
 
+    // P3-lite delivery fallback: prefer this seat's own resources; a client
+    // with none of them (e.g. a bar spawned on another seat) is still served
+    // through whatever resources it does have
+    bool hasOwned = false;
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != FOCUS->client() || s->resource->m_owner.lock() != seat)
+        if (s->resource->client() == FOCUS->client() && s->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    for (auto const& s : m_seatResources) {
+        if (s->resource->client() != FOCUS->client())
+            continue;
+        if (hasOwned && s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& k : s->resource->m_keyboards) {
@@ -405,8 +462,19 @@ void CSeatManager::sendKeyboardMods(SP<CSeat> seat, uint32_t depressed, uint32_t
     if (!FOCUS)
         return;
 
+    // P3-lite delivery fallback: see sendKeyboardKey
+    bool hasOwned = false;
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != FOCUS->client() || s->resource->m_owner.lock() != seat)
+        if (s->resource->client() == FOCUS->client() && s->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    for (auto const& s : m_seatResources) {
+        if (s->resource->client() != FOCUS->client())
+            continue;
+        if (hasOwned && s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& k : s->resource->m_keyboards) {
@@ -442,15 +510,21 @@ void CSeatManager::setPointerFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf, 
 
     seat->m_ptrFocusDestroyListener.reset();
 
-    for (auto const& p : PROTO::seat->m_pointers) {
-        if (!p)
+    // P3-lite delivery fallback: see setKeyboardFocus
+    wl_client* OLDC = seat->m_pointerFocus ? seat->m_pointerFocus->client() : nullptr;
+    for (auto const& r : m_seatResources) {
+        const bool OWNED = r->resource->m_owner.lock() == seat;
+        if (!OWNED && (!OLDC || r->resource->client() != OLDC))
+            continue;
+        if (!OWNED && r->resource->m_owner.lock() && r->resource->m_owner.lock()->isDefault() && resourceHeldByOtherSeat(this, r->resource, seat))
             continue;
 
-        const auto OWNER = p->m_owner.lock();
-        if (!OWNER || OWNER->m_owner.lock() != seat)
-            continue;
+        for (auto const& p : r->resource->m_pointers) {
+            if (!p)
+                continue;
 
-        p->sendLeave();
+            p->sendLeave();
+        }
     }
 
     auto lastPointerFocusResource = seat->m_pointerFocusResource.lock();
@@ -464,8 +538,19 @@ void CSeatManager::setPointerFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf, 
     }
 
     auto client = surf->client();
+
+    bool hasOwned = false;
     for (auto const& r : m_seatResources | std::views::reverse) {
-        if (r->resource->client() != client || r->resource->m_owner.lock() != seat)
+        if (r->resource->client() == client && r->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    for (auto const& r : m_seatResources | std::views::reverse) {
+        if (r->resource->client() != client)
+            continue;
+        if (hasOwned && r->resource->m_owner.lock() != seat)
             continue;
 
         seat->m_pointerFocusResource = r->resource;
@@ -513,6 +598,8 @@ void CSeatManager::setPointerFocusDefault(SP<CWLSurfaceResource> surf, const Vec
 
     for (auto const& p : PROTO::seat->m_pointers) {
         if (!p || !resourceOwnedBy(p->m_owner, defaultSeat()))
+            continue;
+        if (resourceHeldByOtherSeat(this, p->m_owner.lock(), defaultSeat()))
             continue;
 
         p->sendLeave();
@@ -562,8 +649,19 @@ void CSeatManager::sendPointerMotion(SP<CSeat> seat, uint32_t timeMs, const Vect
     if (!FOCUS)
         return;
 
+    // P3-lite delivery fallback: see sendKeyboardKey
+    bool hasOwned = false;
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != FOCUS->client() || s->resource->m_owner.lock() != seat)
+        if (s->resource->client() == FOCUS->client() && s->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    for (auto const& s : m_seatResources) {
+        if (s->resource->client() != FOCUS->client())
+            continue;
+        if (hasOwned && s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& p : s->resource->m_pointers) {
@@ -590,8 +688,19 @@ void CSeatManager::sendPointerButton(SP<CSeat> seat, uint32_t timeMs, uint32_t k
     if (!FOCUS)
         return;
 
+    // P3-lite delivery fallback: see sendKeyboardKey
+    bool hasOwned = false;
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != FOCUS->client() || s->resource->m_owner.lock() != seat)
+        if (s->resource->client() == FOCUS->client() && s->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    for (auto const& s : m_seatResources) {
+        if (s->resource->client() != FOCUS->client())
+            continue;
+        if (hasOwned && s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& p : s->resource->m_pointers) {
@@ -639,8 +748,19 @@ void CSeatManager::sendPointerAxis(SP<CSeat> seat, uint32_t timeMs, wl_pointer_a
     if (!FOCUS)
         return;
 
+    // P3-lite delivery fallback: see sendKeyboardKey
+    bool hasOwned = false;
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != FOCUS->client() || s->resource->m_owner.lock() != seat)
+        if (s->resource->client() == FOCUS->client() && s->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    for (auto const& s : m_seatResources) {
+        if (s->resource->client() != FOCUS->client())
+            continue;
+        if (hasOwned && s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& p : s->resource->m_pointers) {
