@@ -28,6 +28,14 @@ namespace Input {
         return out;
     }
 
+    std::optional<std::string> CPidSeatRegistry::peekFor(pid_t pid) {
+        auto& m  = map();
+        auto  it = m.find(pid);
+        if (it == m.end())
+            return std::nullopt;
+        return it->second;
+    }
+
     UP<CPidSeatRegistry>& pidSeatRegistry() {
         static UP<CPidSeatRegistry> p = makeUnique<CPidSeatRegistry>();
         return p;

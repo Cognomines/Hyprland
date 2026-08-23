@@ -4,6 +4,7 @@
 
 #include <sys/types.h>
 
+#include <optional>
 #include <string>
 
 /*
@@ -18,6 +19,8 @@ namespace Input {
         void associate(pid_t pid, const std::string& seatName);
         // returns the seat name for pid and consumes the entry; "" if unknown
         std::string takeFor(pid_t pid);
+        // returns the seat name for pid without consuming the entry
+        std::optional<std::string> peekFor(pid_t pid);
 
       private:
         static constexpr size_t MAX_ENTRIES = 512;
