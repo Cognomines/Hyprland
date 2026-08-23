@@ -370,6 +370,9 @@ void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf)
         }
     }
 
+    if (!hasOwned)
+        Log::logger->log(Log::INFO, "[seatmgr] kb enter via delivery fallback for seat {}", seat->name());
+
     for (auto const& r : m_seatResources | std::views::reverse) {
         if (r->resource->client() != client)
             continue;
@@ -395,6 +398,8 @@ void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf)
             k->sendMods(depressed, latched, locked, 0);
         }
     }
+
+    Log::logger->log(Log::INFO, "[seatmgr] kb focus for seat '{}' -> client {}{}", seat->name(), sc<const void*>(client), hasOwned ? "" : " (fallback)");
 
     seat->m_kbFocusDestroyListener = surf->m_events.destroy.listen([this, seat] { setKeyboardFocus(seat, nullptr); });
 
@@ -462,6 +467,9 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
         if (!OWNED && resourceHeldByOtherSeat(this, OWNERRES, defaultSeat()))
             continue;
 
+        if (!OWNED)
+            Log::logger->log(Log::INFO, "[seatmgr] default kb leave via delivery fallback");
+
         k->sendMods(0, m_keyboard->m_modifiersState.latched, m_keyboard->m_modifiersState.locked, m_keyboard->m_modifiersState.group);
         k->sendLeave();
     }
@@ -502,6 +510,9 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
         }
     }
 
+    if (!hasOwned)
+        Log::logger->log(Log::INFO, "[seatmgr] default kb enter via delivery fallback");
+
     for (auto const& r : m_seatResources | std::views::reverse) {
         if (r->resource->client() != client)
             continue;
@@ -528,6 +539,8 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
         }
     }
 
+    Log::logger->log(Log::INFO, "[seatmgr] default kb focus -> client {}{}", sc<const void*>(client), hasOwned ? "" : " (fallback)");
+
     m_listeners.keyboardSurfaceDestroy = surf->m_events.destroy.listen([this] { setKeyboardFocus(nullptr); });
 
     m_events.keyboardFocusChange.emit();
@@ -535,6 +548,10 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
 
 void CSeatManager::sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key, wl_keyboard_key_state state_) {
     const auto FOCUS = (!seat || seat->isDefault()) ? m_state.keyboardFocusResource.lock() : seat->m_keyboardFocusResource.lock();
+    if (!FOCUS) {
+        Log::logger->log(Log::INFO, "[seatmgr] {} dropped: seat focus resource is null", "key");
+        return;
+    }
     if (!FOCUS)
         return;
 
@@ -548,6 +565,9 @@ void CSeatManager::sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key
             break;
         }
     }
+
+    if (!hasOwned)
+        Log::logger->log(Log::DEBUG, "[seatmgr] key delivered via delivery fallback");
 
     for (auto const& s : m_seatResources) {
         if (s->resource->client() != FOCUS->client())
@@ -570,6 +590,10 @@ void CSeatManager::sendKeyboardKey(uint32_t timeMs, uint32_t key, wl_keyboard_ke
 
 void CSeatManager::sendKeyboardMods(SP<CSeat> seat, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
     const auto FOCUS = (!seat || seat->isDefault()) ? m_state.keyboardFocusResource.lock() : seat->m_keyboardFocusResource.lock();
+    if (!FOCUS) {
+        Log::logger->log(Log::INFO, "[seatmgr] {} dropped: seat focus resource is null", "mods");
+        return;
+    }
     if (!FOCUS)
         return;
 
@@ -581,6 +605,9 @@ void CSeatManager::sendKeyboardMods(SP<CSeat> seat, uint32_t depressed, uint32_t
             break;
         }
     }
+
+    if (!hasOwned)
+        Log::logger->log(Log::DEBUG, "[seatmgr] mods delivered via delivery fallback");
 
     for (auto const& s : m_seatResources) {
         if (s->resource->client() != FOCUS->client())
@@ -658,6 +685,9 @@ void CSeatManager::setPointerFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf, 
         }
     }
 
+    if (!hasOwned)
+        Log::logger->log(Log::INFO, "[seatmgr] ptr enter via delivery fallback for seat {}", seat->name());
+
     for (auto const& r : m_seatResources | std::views::reverse) {
         if (r->resource->client() != client)
             continue;
@@ -672,6 +702,8 @@ void CSeatManager::setPointerFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf, 
             p->sendEnter(surf, local);
         }
     }
+
+    Log::logger->log(Log::INFO, "[seatmgr] ptr focus for seat '{}' -> client {}{}", seat->name(), sc<const void*>(client), hasOwned ? "" : " (fallback)");
 
     if (seat->m_pointerFocusResource != lastPointerFocusResource)
         sendPointerFrame(lastPointerFocusResource);
@@ -722,6 +754,9 @@ void CSeatManager::setPointerFocusDefault(SP<CWLSurfaceResource> surf, const Vec
         if (!OWNED && resourceHeldByOtherSeat(this, OWNERRES, defaultSeat()))
             continue;
 
+        if (!OWNED)
+            Log::logger->log(Log::INFO, "[seatmgr] default ptr leave via delivery fallback");
+
         p->sendLeave();
     }
 
@@ -752,6 +787,9 @@ void CSeatManager::setPointerFocusDefault(SP<CWLSurfaceResource> surf, const Vec
         }
     }
 
+    if (!hasOwned)
+        Log::logger->log(Log::INFO, "[seatmgr] default ptr enter via delivery fallback");
+
     for (auto const& r : m_seatResources | std::views::reverse) {
         if (r->resource->client() != client)
             continue;
@@ -767,6 +805,8 @@ void CSeatManager::setPointerFocusDefault(SP<CWLSurfaceResource> surf, const Vec
         }
     }
 
+    Log::logger->log(Log::INFO, "[seatmgr] default ptr focus -> client {}{}", sc<const void*>(client), hasOwned ? "" : " (fallback)");
+
     if (m_state.pointerFocusResource != lastPointerFocusResource)
         sendPointerFrame(lastPointerFocusResource);
 
@@ -780,6 +820,10 @@ void CSeatManager::setPointerFocusDefault(SP<CWLSurfaceResource> surf, const Vec
 
 void CSeatManager::sendPointerMotion(SP<CSeat> seat, uint32_t timeMs, const Vector2D& local) {
     const auto FOCUS = (!seat || seat->isDefault()) ? m_state.pointerFocusResource.lock() : seat->m_pointerFocusResource.lock();
+    if (!FOCUS) {
+        Log::logger->log(Log::INFO, "[seatmgr] {} dropped: seat focus resource is null", "motion");
+        return;
+    }
     if (!FOCUS)
         return;
 
@@ -791,6 +835,9 @@ void CSeatManager::sendPointerMotion(SP<CSeat> seat, uint32_t timeMs, const Vect
             break;
         }
     }
+
+    if (!hasOwned)
+        Log::logger->log(Log::DEBUG, "[seatmgr] motion delivered via delivery fallback");
 
     for (auto const& s : m_seatResources) {
         if (s->resource->client() != FOCUS->client())
@@ -819,6 +866,10 @@ void CSeatManager::sendPointerButton(SP<CSeat> seat, uint32_t timeMs, uint32_t k
         return;
 
     const auto FOCUS = (!seat || seat->isDefault()) ? m_state.pointerFocusResource.lock() : seat->m_pointerFocusResource.lock();
+    if (!FOCUS) {
+        Log::logger->log(Log::INFO, "[seatmgr] {} dropped: seat focus resource is null", "button");
+        return;
+    }
     if (!FOCUS)
         return;
 
@@ -830,6 +881,9 @@ void CSeatManager::sendPointerButton(SP<CSeat> seat, uint32_t timeMs, uint32_t k
             break;
         }
     }
+
+    if (!hasOwned)
+        Log::logger->log(Log::DEBUG, "[seatmgr] button delivered via delivery fallback");
 
     for (auto const& s : m_seatResources) {
         if (s->resource->client() != FOCUS->client())
@@ -879,6 +933,10 @@ void CSeatManager::sendPointerFrame(WP<CWLSeatResource> pResource) {
 void CSeatManager::sendPointerAxis(SP<CSeat> seat, uint32_t timeMs, wl_pointer_axis axis, double value, int32_t discrete, int32_t value120, wl_pointer_axis_source source,
                                    wl_pointer_axis_relative_direction relative) {
     const auto FOCUS = (!seat || seat->isDefault()) ? m_state.pointerFocusResource.lock() : seat->m_pointerFocusResource.lock();
+    if (!FOCUS) {
+        Log::logger->log(Log::INFO, "[seatmgr] {} dropped: seat focus resource is null", "axis");
+        return;
+    }
     if (!FOCUS)
         return;
 
@@ -890,6 +948,9 @@ void CSeatManager::sendPointerAxis(SP<CSeat> seat, uint32_t timeMs, wl_pointer_a
             break;
         }
     }
+
+    if (!hasOwned)
+        Log::logger->log(Log::DEBUG, "[seatmgr] axis delivered via delivery fallback");
 
     for (auto const& s : m_seatResources) {
         if (s->resource->client() != FOCUS->client())

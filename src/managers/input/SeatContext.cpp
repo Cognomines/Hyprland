@@ -23,6 +23,8 @@ namespace Input {
     }
 
     SScopedAmbientSeat::SScopedAmbientSeat(SP<CSeat> seat) {
+        if (seat)
+            Log::logger->log(Log::DEBUG, "[seatmgr] ambient scope enter seat '{}' (depth {})", seat->name(), seatStack().size() + 1);
         seatStack().emplace_back(std::move(seat));
     }
 
@@ -37,14 +39,17 @@ namespace Input {
         wl_client_get_credentials(client, &pid, nullptr, nullptr);
 
         const auto NAME = pidSeatRegistry()->peekFor(pid);
-        if (!NAME)
+        if (!NAME) {
+            Log::logger->log(Log::DEBUG, "[seatmgr] seatForClient pid {} -> no registry entry, default", pid);
             return g_pSeatManager->defaultSeat();
+        }
 
         for (auto const& s : g_pSeatManager->seats()) {
             if (s->name() == *NAME)
                 return s;
         }
 
+        Log::logger->log(Log::WARN, "[seatmgr] seatForClient pid {} -> registry seat '{}' not found, default", pid, *NAME);
         return g_pSeatManager->defaultSeat();
     }
 }

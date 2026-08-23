@@ -15,6 +15,7 @@
 #include "../../state/MonitorState.hpp"
 
 #include <hyprutils/string/VarList.hpp>
+#include "../../debug/log/Logger.hpp"
 
 CHyprBorderDecoration::CHyprBorderDecoration(PHLWINDOW pWindow) :
     IHyprWindowDecoration(pWindow), m_window(pWindow), m_gradient(Config::CGradientValueData{CHyprColor(sc<uint64_t>(0))}) {
@@ -231,6 +232,9 @@ void CHyprBorderDecoration::updateState() {
 
         ++foreignIdx;
     }
+
+    Log::logger->log(Log::DEBUG, "[seatmgr] border {}: defaultOnWindow={} foreignContributed={} contributors={}", sc<const void*>(PWINDOW.get()), DEFAULTONWINDOW,
+                     foreignContributed, CONTRIBUTORS.size());
 
     if (CONTRIBUTORS.size() >= 2) {
         std::vector<CHyprColor> cols;
