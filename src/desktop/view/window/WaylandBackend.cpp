@@ -7,6 +7,7 @@
 #include "../../../protocols/XDGDialog.hpp"
 #include "../../../protocols/XDGShell.hpp"
 #include "../../../protocols/core/Compositor.hpp"
+#include "../../../managers/SeatManager.hpp"
 
 using namespace Desktop::View;
 
@@ -313,8 +314,15 @@ void CWaylandBackend::acknowledgeConfigure(const CBox& clientBox) {
 
 void CWaylandBackend::setActive(bool active) {
     const auto RESOURCE = m_resource.lock();
-    if (RESOURCE && RESOURCE->m_toplevel)
-        RESOURCE->m_toplevel->setActive(active);
+    if (!RESOURCE || !RESOURCE->m_toplevel)
+        return;
+
+    // logical seats: keep a window activated while ANY seat holds keyboard
+    // focus on it, even when the global focus moved elsewhere
+    if (!active && g_pSeatManager && g_pSeatManager->isWindowKeyboardFocusedAnywhere(m_window.lock()))
+        return;
+
+    RESOURCE->m_toplevel->setActive(active);
 }
 
 void CWaylandBackend::setFullscreen(bool fullscreen) {

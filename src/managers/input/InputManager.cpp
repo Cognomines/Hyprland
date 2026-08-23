@@ -647,8 +647,11 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             s->m_focusWindow.reset();
             s->m_hoverWindow.reset();
 
-            if (PREVFOCUS)
+            // activated stays on if another seat still holds keyboard focus
+            if (PREVFOCUS) {
                 PREVFOCUS->presentation().updateDecorations();
+                PREVFOCUS->backend().setActive(false);
+            }
             if (PREVHOVER && PREVHOVER != PREVFOCUS)
                 PREVHOVER->presentation().updateDecorations();
         }
@@ -696,12 +699,17 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             SEAT->m_focusWindow = pFoundWindow;
             SEAT->m_hoverWindow = pFoundWindow;
 
-            if (PREVFOCUS && PREVFOCUS != pFoundWindow)
+            // xdg_toplevel activated is a union over seats: activate what this
+            // seat focused, deactivate what it left (the backend keeps the
+            // window activated if another seat still holds keyboard focus)
+            if (pFoundWindow)
+                pFoundWindow->backend().setActive(true);
+            if (PREVFOCUS && PREVFOCUS != pFoundWindow) {
                 PREVFOCUS->presentation().updateDecorations();
+                PREVFOCUS->backend().setActive(false);
+            }
             if (PREVHOVER && PREVHOVER != pFoundWindow && PREVHOVER != PREVFOCUS)
                 PREVHOVER->presentation().updateDecorations();
-            if (pFoundWindow)
-                pFoundWindow->presentation().updateDecorations();
         }
 
         return;

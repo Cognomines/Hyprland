@@ -11,6 +11,8 @@
 #include "../desktop/state/FocusState.hpp"
 #include "../devices/IKeyboard.hpp"
 #include "../desktop/view/LayerSurface.hpp"
+#include "../desktop/view/WLSurface.hpp"
+#include "../desktop/view/window/Window.hpp"
 #include "../managers/input/InputManager.hpp"
 #include "../state/MonitorState.hpp"
 #include "devices/IHID.hpp"
@@ -345,6 +347,35 @@ void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf)
 
 void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
     setKeyboardFocus(Input::ambientSeat(), surf);
+}
+
+static PHLWINDOW windowFromFocusSurface(SP<CWLSurfaceResource> surf) {
+    if (!surf)
+        return nullptr;
+
+    const auto HLSURF = Desktop::View::CWLSurface::fromResource(surf);
+    if (!HLSURF)
+        return nullptr;
+
+    return Desktop::View::CWindow::fromView(HLSURF->view());
+}
+
+bool CSeatManager::isWindowKeyboardFocusedAnywhere(PHLWINDOW window) {
+    if (!window)
+        return false;
+
+    if (windowFromFocusSurface(m_state.keyboardFocus.lock()) == window)
+        return true;
+
+    for (auto const& s : m_seats) {
+        if (!s || s->isDefault())
+            continue;
+
+        if (windowFromFocusSurface(s->m_keyboardFocus.lock()) == window)
+            return true;
+    }
+
+    return false;
 }
 
 void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {

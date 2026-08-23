@@ -5,6 +5,7 @@
 #include "../helpers/signal/Signal.hpp"
 #include "../helpers/math/Math.hpp"
 #include "../protocols/types/DataDevice.hpp"
+#include "../desktop/DesktopTypes.hpp"
 #include "input/Seat.hpp"
 #include <vector>
 
@@ -77,6 +78,9 @@ class CSeatManager {
     void setKeyboardFocus(SP<CWLSurfaceResource> surf);
     void sendKeyboardKey(uint32_t timeMs, uint32_t key, wl_keyboard_key_state state);
     void sendKeyboardMods(uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group);
+
+    // true when any seat (default included) keeps keyboard focus on this window
+    bool isWindowKeyboardFocusedAnywhere(PHLWINDOW window);
 
     // legacy default-seat implementations backing m_state; do not call directly
     void     setKeyboardFocusDefault(SP<CWLSurfaceResource> surf);
