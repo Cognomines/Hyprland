@@ -34,7 +34,9 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
 
     PMONITOR = PMONITOR ? PMONITOR : Desktop::focusState()->monitor();
 
-    if (PMONITOR != Desktop::focusState()->monitor())
+    // only default-seat input drives the global focus monitor
+    const auto OWNER = e.device->m_seat.lock();
+    if (OWNER && OWNER->isDefault() && PMONITOR != Desktop::focusState()->monitor())
         Desktop::focusState()->rawMonitorFocus(PMONITOR);
 
     const auto TOUCH_COORDS = PMONITOR->m_position + (e.pos * PMONITOR->m_size);

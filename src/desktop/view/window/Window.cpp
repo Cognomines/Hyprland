@@ -55,7 +55,10 @@
 #include "../../../render/Renderer.hpp"
 #include "../../../ipc/s2/S2.hpp"
 #include "../../../managers/input/InputManager.hpp"
+#include "../../../managers/input/SeatContext.hpp"
+#include "../../../managers/SeatManager.hpp"
 #include "../../../pointer/PointerController.hpp"
+#include "../../../pointer/PointerManager.hpp"
 #include "../../../managers/fullscreen/FullscreenController.hpp"
 #include "../../../layout/algorithm/Algorithm.hpp"
 #include "../../../layout/space/Space.hpp"
@@ -1139,6 +1142,18 @@ void CWindow::mapWindow() {
         Desktop::focusState()->rawMonitorFocus(State::monitorState()->query().vec({}).run());
         PMONITOR = Desktop::focusState()->monitor();
     }
+
+    // logical seats: a client spawns where its spawning seat's cursor lives,
+    // not where the default seat's global focus monitor points
+    const auto SPAWNSEAT = Input::seatForPid(m_backend->pid());
+    if (SPAWNSEAT && !SPAWNSEAT->isDefault()) {
+        const auto SEATMONITOR = State::monitorState()->query().vec(Pointer::mgr()->position(SPAWNSEAT)).run();
+        if (SEATMONITOR) {
+            Log::logger->log(Log::INFO, "[seatmgr] window {:x} spawned by seat '{}', placing on monitor {}", (uintptr_t)this, SPAWNSEAT->name(), SEATMONITOR->m_name);
+            PMONITOR = SEATMONITOR;
+        }
+    }
+
     if (!PMONITOR || (!PMONITOR->m_activeSpecialWorkspace && !PMONITOR->m_activeWorkspace)) {
         Log::logger->log(Log::ERR, "mapWindow: no valid monitor/workspace, aborting map for {:x}", (uintptr_t)this);
         return;
@@ -1416,6 +1431,10 @@ void CWindow::mapWindow() {
     ) {
         // add to group if we are focused on one
         Desktop::focusState()->window()->grouping().group()->add(m_self.lock());
+    } else if (SPAWNSEAT && !SPAWNSEAT->isDefault()) {
+        // layout split direction follows the spawning seat's cursor
+        const Input::SScopedAmbientSeat SEAT_SCOPE{SPAWNSEAT};
+        g_layoutManager->newTarget(m_target, m_workspace->m_space);
     } else
         g_layoutManager->newTarget(m_target, m_workspace->m_space);
 
@@ -1482,8 +1501,14 @@ void CWindow::mapWindow() {
 
         // don't steal pointer focus with X11 when buttons are held (e.g., during drags)
         // if the incoming window is an OR
-        if (!m_backend->isX11() || !g_pInputManager->hasHeldButtons() || !TRAITS.overrideRedirect)
-            Desktop::focusState()->fullWindowFocus(m_self.lock(), FOCUS_REASON_NEW_WINDOW);
+        if (!m_backend->isX11() || !g_pInputManager->hasHeldButtons() || !TRAITS.overrideRedirect) {
+            // logical seats: a window spawned by a foreign seat focuses its spawning seat
+            // only, so the default seat's global focus and monitor stay where they are
+            if (SPAWNSEAT && !SPAWNSEAT->isDefault())
+                g_pSeatManager->setKeyboardFocus(SPAWNSEAT, m_backend->surface());
+            else
+                Desktop::focusState()->fullWindowFocus(m_self.lock(), FOCUS_REASON_NEW_WINDOW);
+        }
 
         m_presentation->alpha(WINDOW_ALPHA_ACTIVE)->setValueAndWarp(*PACTIVEALPHA);
         m_presentation->warpDimPercent(m_ruleApplicator->noDim().valueOrDefault() ? 0.F : *PDIMSTRENGTH);

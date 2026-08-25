@@ -387,7 +387,9 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         }
     }
 
-    if (PMONITOR != Desktop::focusState()->monitor() && (*PMOUSEFOCUSMON || refocus) && m_forcedFocus.expired())
+    // only default-seat passes drive the global focus monitor; foreign seats
+    // hit-test under their own cursors without dragging global state along
+    if (SEAT->isDefault() && PMONITOR != Desktop::focusState()->monitor() && (*PMOUSEFOCUSMON || refocus) && m_forcedFocus.expired())
         Desktop::focusState()->rawMonitorFocus(PMONITOR);
 
     // IME popups essentially always exist on the top - they are transient,
@@ -1052,8 +1054,12 @@ void CInputManager::processMouseDownNormal(const IPointer::SButtonEvent& e, SP<I
     // notify app if we didn't handle it
     g_pSeatManager->sendPointerButton(e.timeMs, e.button, e.state);
 
-    if (const auto PMON = State::monitorState()->query().vec(mouseCoords).run(); PMON != Desktop::focusState()->monitor() && PMON)
-        Desktop::focusState()->rawMonitorFocus(PMON);
+    // only default-seat input drives the global focus monitor; foreign seats
+    // keep their own per-seat focus state and must not drag it along
+    if (seat()->isDefault()) {
+        if (const auto PMON = State::monitorState()->query().vec(mouseCoords).run(); PMON != Desktop::focusState()->monitor() && PMON)
+            Desktop::focusState()->rawMonitorFocus(PMON);
+    }
 
     if (g_pSeatManager->m_seatGrab && e.state == WL_POINTER_BUTTON_STATE_PRESSED) {
         m_hardInput = true;
