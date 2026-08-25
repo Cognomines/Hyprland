@@ -211,6 +211,24 @@ void CInputManager::simulateMouseMovement() {
     mouseMoveUnified(Time::millis(Time::steadyNow()));
 }
 
+void CInputManager::refocusForeignSeats() {
+    // Global (default-seat) keyboard focus moved: re-run the unified pass
+    // for every other live seat under its own cursor so its keyboard enter
+    // survives. Clients key their focused rendering off wl_keyboard
+    // enter/leave only — a missed re-enter renders e.g. kitty as unfocused
+    // (faded text) until its user moves the cursor again.
+    for (auto const& s : g_pSeatManager->seats()) {
+        if (!s || s->isDefault())
+            continue;
+        if (!s->hasLiveDevices() || s->m_pointers.empty())
+            continue;
+
+        const Input::SScopedAmbientSeat SCOPE{s};
+        m_lastCursorPosFloored = m_lastCursorPosFloored - Vector2D(1, 1); // force the report, see simulateMouseMovement
+        mouseMoveUnified(Time::millis(Time::steadyNow()));
+    }
+}
+
 void CInputManager::sendMotionEventsToFocused() {
     if (!Desktop::focusState()->surface() || isConstrained())
         return;
@@ -632,22 +650,17 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
 
         g_pSeatManager->setPointerFocus(SEAT, nullptr, {});
 
-        // P3-lite: cursor left every surface — drop per-seat window tracking
-        // so borders stop lingering on the last touched window
-        for (auto const& s : g_pSeatManager->seats()) {
-            if (!s)
-                continue;
+        // P3-lite: this seat's cursor left every surface — drop its window
+        // tracking so borders stop lingering on the last touched window.
+        // Other seats keep theirs: their cursors did not move.
+        const auto PREVFOCUS = SEAT->m_focusWindow.lock();
+        const auto PREVHOVER = SEAT->m_hoverWindow.lock();
 
-            const auto PREVFOCUS = s->m_focusWindow.lock();
-            const auto PREVHOVER = s->m_hoverWindow.lock();
+        if (PREVFOCUS || PREVHOVER) {
+            SEAT->m_focusWindow.reset();
+            SEAT->m_hoverWindow.reset();
 
-            if (!PREVFOCUS && !PREVHOVER)
-                continue;
-
-            s->m_focusWindow.reset();
-            s->m_hoverWindow.reset();
-
-            Log::logger->log(Log::INFO, "[seatmgr] clearing hover/focus for seat '{}' (prev focus {}, prev hover {})", s->name(), sc<const void*>(PREVFOCUS.get()),
+            Log::logger->log(Log::INFO, "[seatmgr] clearing hover/focus for seat '{}' (prev focus {}, prev hover {})", SEAT->name(), sc<const void*>(PREVFOCUS.get()),
                              sc<const void*>(PREVHOVER.get()));
 
             // activated stays on if another seat still holds keyboard focus
@@ -708,10 +721,13 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             // xdg_toplevel activated is a union over seats: activate what this
             // seat focused, deactivate what it left (the backend keeps the
             // window activated if another seat still holds keyboard focus)
-            if (pFoundWindow)
+            if (pFoundWindow) {
                 pFoundWindow->backend().setActive(true);
+                pFoundWindow->presentation().refreshValues();
+            }
             if (PREVFOCUS && PREVFOCUS != pFoundWindow) {
                 PREVFOCUS->presentation().updateDecorations();
+                PREVFOCUS->presentation().refreshValues();
                 PREVFOCUS->backend().setActive(false);
             }
             if (PREVHOVER && PREVHOVER != pFoundWindow && PREVHOVER != PREVFOCUS)

@@ -82,6 +82,9 @@ class CSeatManager {
     // true when any seat (default included) keeps keyboard focus on this window
     bool isWindowKeyboardFocusedAnywhere(PHLWINDOW window);
 
+    // true when any non-default seat keeps keyboard focus on this window
+    bool isWindowForeignSeatFocused(PHLWINDOW window);
+
     // legacy default-seat implementations backing m_state; do not call directly
     void     setKeyboardFocusDefault(SP<CWLSurfaceResource> surf);
     void     setPointerFocusDefault(SP<CWLSurfaceResource> surf, const Vector2D& local);

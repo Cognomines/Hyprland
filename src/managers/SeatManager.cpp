@@ -403,6 +403,21 @@ bool CSeatManager::isWindowKeyboardFocusedAnywhere(PHLWINDOW window) {
     return false;
 }
 
+bool CSeatManager::isWindowForeignSeatFocused(PHLWINDOW window) {
+    if (!window)
+        return false;
+
+    for (auto const& s : m_seats) {
+        if (!s || s->isDefault())
+            continue;
+
+        if (windowFromFocusSurface(s->m_keyboardFocus.lock()) == window)
+            return true;
+    }
+
+    return false;
+}
+
 void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
     if (m_state.keyboardFocus == surf)
         return;
@@ -428,7 +443,9 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
         const bool ONOLDCLI = OLDC && OWNERRES && OWNERRES->client() == OLDC;
         if (!OWNED && !ONOLDCLI)
             continue;
-        if (!OWNED && resourceHeldByOtherSeat(this, OWNERRES, defaultSeat()))
+        // a default-owned resource can carry another seat's live enter
+        // (delivery fallback): never retract it on the default seat's behalf
+        if (resourceHeldByOtherSeat(this, OWNERRES, defaultSeat()))
             continue;
 
         if (!OWNED)
@@ -443,6 +460,10 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
     m_state.keyboardFocus = surf;
 
     if (!surf) {
+        // foreign seats may need to re-enter their own focus after the
+        // default seat's client pair changed (map steals, leaves, refocuses)
+        if (g_pInputManager)
+            g_pInputManager->refocusForeignSeats();
         m_events.keyboardFocusChange.emit();
         return;
     }
@@ -507,6 +528,11 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
     Log::logger->log(Log::INFO, "[seatmgr] default kb focus -> client {}{}", sc<const void*>(client), hasOwned ? "" : " (fallback)");
 
     m_listeners.keyboardSurfaceDestroy = surf->m_events.destroy.listen([this] { setKeyboardFocus(nullptr); });
+
+    // self-healing: foreign seats re-enter their own focus under their own
+    // cursors whenever the default seat's focus pair changes
+    if (g_pInputManager)
+        g_pInputManager->refocusForeignSeats();
 
     m_events.keyboardFocusChange.emit();
 }
@@ -660,6 +686,7 @@ void CSeatManager::setPointerFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf, 
             continue;
 
         seat->m_pointerFocusResource = r->resource;
+        seat->m_lastPointerLocal     = local;
         for (auto const& p : r->resource->m_pointers) {
             if (!p)
                 continue;
@@ -716,7 +743,9 @@ void CSeatManager::setPointerFocusDefault(SP<CWLSurfaceResource> surf, const Vec
         const bool ONOLDCLI = OLDC && OWNERRES && OWNERRES->client() == OLDC;
         if (!OWNED && !ONOLDCLI)
             continue;
-        if (!OWNED && resourceHeldByOtherSeat(this, OWNERRES, defaultSeat()))
+        // same as the keyboard loop: a carrier held by another seat is not
+        // ours to leave
+        if (resourceHeldByOtherSeat(this, OWNERRES, defaultSeat()))
             continue;
 
         if (!OWNED)
@@ -1296,16 +1325,36 @@ void CSeatManager::setGrab(SP<CSeatGrab> grab) {
 }
 
 void CSeatManager::resendEnterEvents() {
-    SP<CWLSurfaceResource> kb = m_state.keyboardFocus.lock();
-    SP<CWLSurfaceResource> pt = m_state.pointerFocus.lock();
-
+    // legacy default-seat state, resent explicitly (not via the ambient seat)
+    SP<CWLSurfaceResource> kb   = m_state.keyboardFocus.lock();
+    SP<CWLSurfaceResource> pt   = m_state.pointerFocus.lock();
     auto                   last = m_lastLocalCoords;
 
-    setKeyboardFocus(nullptr);
-    setPointerFocus(nullptr, {});
+    setKeyboardFocusDefault(nullptr);
+    setPointerFocusDefault(nullptr, {});
+    setKeyboardFocusDefault(kb);
+    setPointerFocusDefault(pt, last);
 
-    setKeyboardFocus(kb);
-    setPointerFocus(pt, last);
+    // logical seats: restore each seat's own keyboard and pointer focus, not
+    // just the default's, so clients focused by other seats stay entered.
+    // A missed wl_keyboard leave/enter cycle makes apps like kitty render
+    // their window as unfocused (faded text) until the next cursor move.
+    for (auto const& s : m_seats) {
+        if (!s || s->isDefault())
+            continue;
+
+        const auto KB = s->m_keyboardFocus.lock();
+        if (KB) {
+            setKeyboardFocus(s, nullptr);
+            setKeyboardFocus(s, KB);
+        }
+
+        const auto PT = s->m_pointerFocus.lock();
+        if (PT) {
+            setPointerFocus(s, nullptr, {});
+            setPointerFocus(s, PT, s->m_lastPointerLocal);
+        }
+    }
 }
 
 bool CSeatGrab::accepts(SP<CWLSurfaceResource> surf) {
