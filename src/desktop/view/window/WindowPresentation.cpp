@@ -13,6 +13,7 @@
 #include "../../../render/decorations/CHyprInnerGlowDecoration.hpp"
 #include "../../../render/decorations/DecorationPositioner.hpp"
 #include "../../state/FocusState.hpp"
+#include "../../../managers/SeatManager.hpp"
 
 #include <algorithm>
 #include <array>
@@ -424,22 +425,30 @@ void CWindowPresentation::refreshValues() {
     static auto PINACTIVEALPHA   = CConfigValue<Config::FLOAT>("decoration:inactive_opacity");
     static auto PACTIVEALPHA     = CConfigValue<Config::FLOAT>("decoration:active_opacity");
     static auto PFULLSCREENALPHA = CConfigValue<Config::FLOAT>("decoration:fullscreen_opacity");
+    static auto PFOREIGNALPHA    = CConfigValue<Config::FLOAT>("decoration:foreign_opacity");
     static auto PDIMSTRENGTH     = CConfigValue<Config::FLOAT>("decoration:dim_strength");
     static auto PDIMENABLED      = CConfigValue<Config::INTEGER>("decoration:dim_inactive");
     static auto PDIMMODAL        = CConfigValue<Config::INTEGER>("decoration:dim_modal");
+    static auto PDIMFOREIGN      = CConfigValue<Config::FLOAT>("decoration:foreign_dim_strength");
 
     const bool  IS_SHADOWED_BY_MODAL = m_window.backend().traits().hasModalChild;
+
+    const bool  FOREIGNFOCUSED = g_pSeatManager && g_pSeatManager->isWindowForeignSeatFocused(m_window.m_self.lock());
 
     if (Fullscreen::controller()->getFullscreenModes(m_window.m_self.lock()).internal == Fullscreen::FSMODE_FULLSCREEN)
         *alpha(WINDOW_ALPHA_ACTIVE) = m_window.m_ruleApplicator->alphaFullscreen().valueOrDefault().applyAlpha(*PFULLSCREENALPHA);
     else if (m_window.m_self == Desktop::focusState()->window())
         *alpha(WINDOW_ALPHA_ACTIVE) = m_window.m_ruleApplicator->alpha().valueOrDefault().applyAlpha(*PACTIVEALPHA);
+    else if (FOREIGNFOCUSED)
+        *alpha(WINDOW_ALPHA_ACTIVE) = m_window.m_ruleApplicator->alphaInactive().valueOrDefault().applyAlpha(*PFOREIGNALPHA);
     else
         *alpha(WINDOW_ALPHA_ACTIVE) = m_window.m_ruleApplicator->alphaInactive().valueOrDefault().applyAlpha(*PINACTIVEALPHA);
 
     float goalDim = 1.F;
     if (m_window.m_self == Desktop::focusState()->window() || m_window.m_ruleApplicator->noDim().valueOrDefault() || !*PDIMENABLED)
         goalDim = 0.F;
+    else if (FOREIGNFOCUSED)
+        goalDim = *PDIMFOREIGN;
     else
         goalDim = *PDIMSTRENGTH;
 
