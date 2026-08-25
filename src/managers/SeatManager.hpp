@@ -82,6 +82,12 @@ class CSeatManager {
     // true when any seat (default included) keeps keyboard focus on this window
     bool isWindowKeyboardFocusedAnywhere(PHLWINDOW window);
 
+  private:
+    // fan a key event out to a client's keyboard resources, preferring the
+    // seat's own resources (delivery fallback otherwise)
+    void deliverKeyboardKey(wl_client* client, const SP<CSeat>& seat, uint32_t timeMs, uint32_t key, wl_keyboard_key_state state);
+
+  public:
     // true when any non-default seat keeps keyboard focus on this window
     bool isWindowForeignSeatFocused(PHLWINDOW window);
 

@@ -74,7 +74,10 @@ class CSeat {
     // shared key/mod state across this seat's keyboards,
     // do not write directly
     std::vector<uint32_t> m_pressed;
-    Input::ModifierMask   m_lastMods = Input::HL_MODIFIER_NONE;
+    // client that received this seat's latest key press: releases must go
+    // back there even after focus moved on, or the client repeats forever
+    wl_client*          m_pressedClient = nullptr;
+    Input::ModifierMask m_lastMods      = Input::HL_MODIFIER_NONE;
 
     // P4-lite: independent cursor position for non-default seats. The default
     // seat's position lives in CPointerManager::m_pointerPos.

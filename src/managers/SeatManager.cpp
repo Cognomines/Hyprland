@@ -260,6 +260,7 @@ static void sendSyntheticKeyReleases(const SP<CSeat>& seat, const WP<CWLKeyboard
         KB->sendKey(TIME, code, WL_KEYBOARD_KEY_STATE_RELEASED);
     }
     seat->m_pressed.clear();
+    seat->m_pressedClient = nullptr;
 }
 
 void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf) {
@@ -286,14 +287,17 @@ void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf)
         const bool OWNED = r->resource->m_owner.lock() == seat;
         if (!OWNED && (!OLDC || r->resource->client() != OLDC))
             continue;
-        if (!OWNED && r->resource->m_owner.lock() && r->resource->m_owner.lock()->isDefault() && resourceHeldByOtherSeat(this, r->resource, seat))
-            continue;
+        // same as the default loop: a shared carrier is not ours to leave,
+        // but our pressed keys through it must still be released
+        const bool HELD = !OWNED && r->resource->m_owner.lock() && r->resource->m_owner.lock()->isDefault() && resourceHeldByOtherSeat(this, r->resource, seat);
 
         for (auto const& k : r->resource->m_keyboards) {
             if (!k)
                 continue;
 
             sendSyntheticKeyReleases(seat, k);
+            if (HELD)
+                continue;
             k->sendMods(0, 0, 0, 0);
             k->sendLeave();
         }
@@ -444,14 +448,19 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
         if (!OWNED && !ONOLDCLI)
             continue;
         // a default-owned resource can carry another seat's live enter
-        // (delivery fallback): never retract it on the default seat's behalf
-        if (resourceHeldByOtherSeat(this, OWNERRES, defaultSeat()))
-            continue;
-
-        if (!OWNED)
+        // (delivery fallback): never retract it on the default seat's behalf,
+        // but our pressed keys through it must still be released or the
+        // client repeats them forever
+        const bool HELD = resourceHeldByOtherSeat(this, OWNERRES, defaultSeat());
+        if (!HELD && !OWNED)
             Log::logger->log(Log::INFO, "[seatmgr] default kb leave via delivery fallback");
+        if (HELD)
+            Log::logger->log(Log::DEBUG, "[seatmgr] keeping kb enter on shared carrier, releasing default keys only");
 
         sendSyntheticKeyReleases(defaultSeat(), k);
+        if (HELD)
+            continue;
+
         k->sendMods(0, m_keyboard->m_modifiersState.latched, m_keyboard->m_modifiersState.locked, m_keyboard->m_modifiersState.group);
         k->sendLeave();
     }
@@ -538,12 +547,30 @@ void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
 }
 
 void CSeatManager::sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key, wl_keyboard_key_state state_) {
-    const auto FOCUS = (!seat || seat->isDefault()) ? m_state.keyboardFocusResource.lock() : seat->m_keyboardFocusResource.lock();
-    if (!FOCUS) {
+    const auto FOCUS  = (!seat || seat->isDefault()) ? m_state.keyboardFocusResource.lock() : seat->m_keyboardFocusResource.lock();
+    wl_client* TARGET = FOCUS ? FOCUS->client() : nullptr;
+
+    // a press must always be answered by a release on the SAME client even
+    // after this seat's focus moved elsewhere: route releases to the client
+    // that got the press when the current focus no longer matches it
+    if (state_ == WL_KEYBOARD_KEY_STATE_RELEASED && seat && seat->m_pressedClient && (!TARGET || TARGET != seat->m_pressedClient)) {
+        Log::logger->log(Log::DEBUG, "[seatmgr] releasing key on original client after focus moved");
+        deliverKeyboardKey(seat->m_pressedClient, seat, timeMs, key, state_);
+        return;
+    }
+
+    if (!TARGET) {
         Log::logger->log(Log::INFO, "[seatmgr] {} dropped: seat focus resource is null", "key");
         return;
     }
-    if (!FOCUS)
+
+    deliverKeyboardKey(TARGET, seat, timeMs, key, state_);
+    if (state_ == WL_KEYBOARD_KEY_STATE_PRESSED && seat && !seat->m_pressed.empty())
+        seat->m_pressedClient = TARGET;
+}
+
+void CSeatManager::deliverKeyboardKey(wl_client* client, const SP<CSeat>& seat, uint32_t timeMs, uint32_t key, wl_keyboard_key_state state_) {
+    if (!client)
         return;
 
     // P3-lite delivery fallback: prefer this seat's own resources; a client
@@ -551,7 +578,7 @@ void CSeatManager::sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key
     // through whatever resources it does have
     bool hasOwned = false;
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() == FOCUS->client() && s->resource->m_owner.lock() == seat) {
+        if (s->resource->client() == client && s->resource->m_owner.lock() == seat) {
             hasOwned = true;
             break;
         }
@@ -560,8 +587,9 @@ void CSeatManager::sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key
     if (!hasOwned)
         Log::logger->log(Log::DEBUG, "[seatmgr] key delivered via delivery fallback");
 
+    bool delivered = false;
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != FOCUS->client())
+        if (s->resource->client() != client)
             continue;
         if (hasOwned && s->resource->m_owner.lock() != seat)
             continue;
@@ -571,8 +599,12 @@ void CSeatManager::sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key
                 continue;
 
             k->sendKey(timeMs, key, state_);
+            delivered = true;
         }
     }
+
+    if (!delivered)
+        Log::logger->log(Log::INFO, "[seatmgr] {} dropped: no keyboard resource for the target client", "key");
 }
 
 void CSeatManager::sendKeyboardKey(uint32_t timeMs, uint32_t key, wl_keyboard_key_state state) {

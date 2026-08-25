@@ -650,6 +650,12 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
 
         g_pSeatManager->setPointerFocus(SEAT, nullptr, {});
 
+        // this seat's cursor left every surface: it stops driving keyboard
+        // input into the previous client right away. Held keys are
+        // synthesized-released there so clients never repeat them for a
+        // user who has visibly moved on.
+        g_pSeatManager->setKeyboardFocus(SEAT, nullptr);
+
         // P3-lite: this seat's cursor left every surface — drop its window
         // tracking so borders stop lingering on the last touched window.
         // Other seats keep theirs: their cursors did not move.
