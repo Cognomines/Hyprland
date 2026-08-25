@@ -34,13 +34,10 @@ namespace Input {
             stack.pop_back();
     };
 
-    SP<CSeat> seatForClient(wl_client* client) {
-        pid_t pid = 0;
-        wl_client_get_credentials(client, &pid, nullptr, nullptr);
-
+    SP<CSeat> seatForPid(pid_t pid) {
         const auto NAME = pidSeatRegistry()->peekFor(pid);
         if (!NAME) {
-            Log::logger->log(Log::DEBUG, "[seatmgr] seatForClient pid {} -> no registry entry, default", pid);
+            Log::logger->log(Log::DEBUG, "[seatmgr] seatForPid pid {} -> no registry entry, default", pid);
             return g_pSeatManager->defaultSeat();
         }
 
@@ -49,7 +46,14 @@ namespace Input {
                 return s;
         }
 
-        Log::logger->log(Log::WARN, "[seatmgr] seatForClient pid {} -> registry seat '{}' not found, default", pid, *NAME);
+        Log::logger->log(Log::WARN, "[seatmgr] seatForPid pid {} -> registry seat '{}' not found, default", pid, *NAME);
         return g_pSeatManager->defaultSeat();
+    }
+
+    SP<CSeat> seatForClient(wl_client* client) {
+        pid_t pid = 0;
+        wl_client_get_credentials(client, &pid, nullptr, nullptr);
+
+        return seatForPid(pid);
     }
 }

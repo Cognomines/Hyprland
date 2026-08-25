@@ -19,6 +19,9 @@ namespace Input {
     // seat registry at wl_seat bind time; falls back to the default seat
     SP<CSeat> seatForClient(wl_client* client);
 
+    // seatForClient resolved straight from a raw pid
+    SP<CSeat> seatForPid(pid_t pid);
+
     // pushes onto the ambient-seat stack until destroyed; nesting supported
     struct SScopedAmbientSeat {
         explicit SScopedAmbientSeat(SP<CSeat> seat);
