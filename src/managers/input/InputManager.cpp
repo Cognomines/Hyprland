@@ -212,15 +212,26 @@ void CInputManager::simulateMouseMovement() {
 }
 
 void CInputManager::refocusForeignSeats() {
-    // Global (default-seat) keyboard focus moved: re-run the unified pass
-    // for every other live seat under its own cursor so its keyboard enter
-    // survives. Clients key their focused rendering off wl_keyboard
-    // enter/leave only — a missed re-enter renders e.g. kitty as unfocused
-    // (faded text) until its user moves the cursor again.
+    // Global (default-seat) keyboard focus moved: re-enter keyboard focus
+    // for every other live seat whose cursor is over a surface, so its
+    // wl_keyboard enter survives.  When the cursor is on the desktop (no
+    // surface), skip the seat entirely — running the full unified pass
+    // would hit the empty-hit path and *clear* keyboard focus, which is
+    // wrong for a seat that spawned a client and is stationary.
     for (auto const& s : g_pSeatManager->seats()) {
         if (!s || s->isDefault())
             continue;
         if (!s->hasLiveDevices() || s->m_pointers.empty())
+            continue;
+
+        // quick hit-test: is the cursor actually over a surface?
+        const auto CURSOR   = Pointer::mgr()->position(s);
+        const auto PMONITOR = State::monitorState()->query().vec(CURSOR).run();
+        if (!PMONITOR)
+            continue;
+
+        const auto WIN = Desktop::viewState()->hitTest().windowAt(CURSOR, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+        if (!WIN)
             continue;
 
         const Input::SScopedAmbientSeat SCOPE{s};

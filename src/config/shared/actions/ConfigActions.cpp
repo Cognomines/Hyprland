@@ -62,7 +62,20 @@ void Actions::setCurrentSubmapFor(const std::string& seatName, const std::string
 }
 
 static PHLWINDOW xtract(std::optional<PHLWINDOW> window) {
-    return window.value_or(Desktop::focusState()->window());
+    if (window)
+        return *window;
+
+    // logical seats: non-default seats resolve from their per-seat focus
+    // rather than the global focus state, so keybinds on a foreign seat
+    // (e.g. SUPER+Q to close) act on the window that seat is typing into
+    const auto SEAT = Input::ambientSeat();
+    if (SEAT && !SEAT->isDefault()) {
+        const auto W = SEAT->m_focusWindow.lock();
+        if (W)
+            return W;
+    }
+
+    return Desktop::focusState()->window();
 }
 
 static void updateRelativeCursorCoords() {
