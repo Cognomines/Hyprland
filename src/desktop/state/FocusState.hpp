@@ -51,10 +51,16 @@ namespace Desktop {
         PHLWINDOW              window();
         PHLMONITOR             monitor();
 
+        void                   setAmbientOverride(PHLWINDOW window, PHLMONITOR monitor);
+        void                   clearAmbientOverride();
+
       private:
         WP<CWLSurfaceResource> m_focusSurface;
         PHLWINDOWREF           m_focusWindow;
         PHLMONITORREF          m_focusMonitor;
+
+        PHLWINDOW              m_ambientWindowOverride  = nullptr;
+        PHLMONITOR             m_ambientMonitorOverride = nullptr;
 
         CHyprSignalListener    m_windowOpen, m_windowClose;
     };

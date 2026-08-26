@@ -1221,7 +1221,15 @@ ActionResult Actions::swapActiveWorkspaces(PHLMONITOR mon1, PHLMONITOR mon2) {
 }
 
 ActionResult Actions::layoutMessage(const std::string& msg) {
+    const auto SEAT = Input::ambientSeat();
+    if (SEAT && !SEAT->isDefault()) {
+        auto win = SEAT->m_focusWindow.lock();
+        auto pos = Pointer::mgr()->position(SEAT);
+        auto mon = State::monitorState()->query().vec(pos).run();
+        Desktop::focusState()->setAmbientOverride(win, mon);
+    }
     auto ret = g_layoutManager->layoutMsg(msg);
+    Desktop::focusState()->clearAmbientOverride();
     if (!ret)
         return std::unexpected(ret.error());
     return {};

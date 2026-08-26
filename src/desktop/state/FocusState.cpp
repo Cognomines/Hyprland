@@ -302,11 +302,21 @@ SP<CWLSurfaceResource> CFocusState::surface() {
 }
 
 PHLWINDOW CFocusState::window() {
-    return m_focusWindow.lock();
+    return m_ambientWindowOverride ? m_ambientWindowOverride : m_focusWindow.lock();
 }
 
 PHLMONITOR CFocusState::monitor() {
-    return m_focusMonitor.lock();
+    return m_ambientMonitorOverride ? m_ambientMonitorOverride : m_focusMonitor.lock();
+}
+
+void CFocusState::setAmbientOverride(PHLWINDOW window, PHLMONITOR monitor) {
+    m_ambientWindowOverride  = window;
+    m_ambientMonitorOverride = monitor;
+}
+
+void CFocusState::clearAmbientOverride() {
+    m_ambientWindowOverride  = nullptr;
+    m_ambientMonitorOverride = nullptr;
 }
 
 void CFocusState::resetWindowFocus() {
