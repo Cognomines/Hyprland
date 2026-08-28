@@ -251,12 +251,20 @@ CXDGToplevelResource::CXDGToplevelResource(SP<CXdgToplevel> resource_, SP<CXDGSu
     });
 
     m_resource->setSetMaximized([this](CXdgToplevel* r) {
+        // We send maximized, apps can pong it back.
+        if (shouldIgnoreInitialMaximizeds())
+            return;
+
         m_state.requestsMaximize = true;
         m_events.stateChanged.emit();
         m_state.requestsMaximize.reset();
     });
 
     m_resource->setUnsetMaximized([this](CXdgToplevel* r) {
+        // We send maximized, apps can pong it back.
+        if (shouldIgnoreInitialMaximizeds())
+            return;
+
         m_state.requestsMaximize = false;
         m_events.stateChanged.emit();
         m_state.requestsMaximize.reset();
@@ -340,6 +348,22 @@ CXDGToplevelResource::~CXDGToplevelResource() {
     m_events.destroy.emit();
     if (m_parent)
         std::erase_if(m_parent->m_children, [this](const auto& other) { return !other || other.get() == this; });
+}
+
+bool CXDGToplevelResource::shouldIgnoreInitialMaximizeds() const {
+    if (!m_owner)
+        return true;
+
+    if (m_owner->m_initialCommit)
+        return true;
+
+    if (!m_owner->m_surface)
+        return true;
+
+    if (!m_owner->m_surface->m_current.buffer)
+        return true;
+
+    return false;
 }
 
 SP<CXDGToplevelResource> CXDGToplevelResource::fromResource(wl_resource* res) {
