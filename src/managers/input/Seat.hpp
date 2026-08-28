@@ -93,6 +93,9 @@ class CSeat {
     Vector2D               m_lastPointerLocal = {0, 0};
     // window focused by this seat's keyboard, drives per-seat border colors
     PHLWINDOWREF m_focusWindow;
+    // monitor the seat's keyboard focus currently lives on, mirrors the
+    // per-seat monitor focus the CFocusState singleton cannot represent
+    PHLMONITORREF m_focusMonitor;
     // window this seat's cursor currently hovers, drives per-seat borders
     PHLWINDOWREF        m_hoverWindow;
 

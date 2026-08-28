@@ -123,7 +123,7 @@ static bool isAutoIDdWorkspace(WORKSPACEID id) {
 }
 
 SWorkspaceIDName getWorkspaceIDNameFromString(const std::string& in, std::optional<PHLMONITOR> baseMon) {
-    const auto       BASEMONITOR = baseMon.value_or(Desktop::focusState()->monitor());
+    const auto       BASEMONITOR = baseMon.value_or(Desktop::focusState()->activeMonitor());
     SWorkspaceIDName result      = {WORKSPACE_INVALID, ""};
 
     if (in.starts_with("special")) {

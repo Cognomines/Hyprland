@@ -19,6 +19,11 @@ namespace Input {
         if (!stack.empty())
             return stack.back();
 
+        // no seat manager yet (e.g. during early config parse/reload) or no
+        // seats created: report no ambient seat, callers must fall back
+        if (!g_pSeatManager || g_pSeatManager->seats().empty())
+            return nullptr;
+
         return g_pSeatManager->defaultSeat();
     }
 
