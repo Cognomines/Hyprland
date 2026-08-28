@@ -366,6 +366,22 @@ CXDGToplevelResource::~CXDGToplevelResource() {
         std::erase_if(m_parent->m_children, [this](const auto& other) { return !other || other.get() == this; });
 }
 
+bool CXDGToplevelResource::shouldIgnoreInitialMaximizeds() const {
+    if (!m_owner)
+        return true;
+
+    if (m_owner->m_initialCommit)
+        return true;
+
+    if (!m_owner->m_surface)
+        return true;
+
+    if (!m_owner->m_surface->m_current.buffer)
+        return true;
+
+    return false;
+}
+
 SP<CXDGToplevelResource> CXDGToplevelResource::fromResource(wl_resource* res) {
     auto data = sc<CXDGToplevelResource*>(sc<CXdgToplevel*>(wl_resource_get_user_data(res))->data());
     return data ? data->m_self.lock() : nullptr;
