@@ -105,7 +105,7 @@ static void parseLayerQueryFromTable(lua_State* L, int idx, const char* fnName, 
 
 static PHLMONITOR monitorFromOptionalArg(lua_State* L, int idx, const char* fnName) {
     if (lua_gettop(L) < idx || lua_isnil(L, idx))
-        return Desktop::focusState()->monitor();
+        return Desktop::focusState()->activeMonitor();
 
     return Internal::monitorFromLuaSelectorOrObject(L, idx, fnName);
 }
@@ -126,7 +126,7 @@ static int hlGetWindows(lua_State* L) {
 }
 
 static int hlGetActiveWindow(lua_State* L) {
-    auto PWINDOW = Desktop::focusState()->window();
+    auto PWINDOW = Desktop::focusState()->activeWindow();
     if (!PWINDOW) {
         lua_pushnil(L);
         return 1;
@@ -247,7 +247,7 @@ static int hlGetMonitor(lua_State* L) {
 }
 
 static int hlGetActiveMonitor(lua_State* L) {
-    const auto PMONITOR = Desktop::focusState()->monitor();
+    const auto PMONITOR = Desktop::focusState()->activeMonitor();
     if (!PMONITOR) {
         lua_pushnil(L);
         return 1;
@@ -320,7 +320,7 @@ static int hlGetCursorPos(lua_State* L) {
 }
 
 static int hlGetLastWindow(lua_State* L) {
-    const auto  current     = Desktop::focusState()->window();
+    const auto  current     = Desktop::focusState()->activeWindow();
     const auto& fullHistory = Desktop::History::windowTracker()->fullHistory();
 
     for (auto it = fullHistory.rbegin(); it != fullHistory.rend(); ++it) {
@@ -341,7 +341,7 @@ static int hlGetLastWindow(lua_State* L) {
 
 static int hlGetLastWorkspace(lua_State* L) {
     const bool hadMonitorArg = lua_gettop(L) >= 1 && !lua_isnil(L, 1);
-    const auto PMONITOR      = hadMonitorArg ? Internal::monitorFromLuaSelectorOrObject(L, 1, "hl.get_last_workspace") : Desktop::focusState()->monitor();
+    const auto PMONITOR      = hadMonitorArg ? Internal::monitorFromLuaSelectorOrObject(L, 1, "hl.get_last_workspace") : Desktop::focusState()->activeMonitor();
     if (!PMONITOR || !PMONITOR->m_activeWorkspace) {
         lua_pushnil(L);
         return 1;

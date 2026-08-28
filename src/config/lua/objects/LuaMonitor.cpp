@@ -52,7 +52,7 @@ static int monitorSetWorkspace(lua_State* L) {
         ws = State::workspaceState()->create(id, (*ref)->m_id, name);
 
     State::workspacePlacementController()->moveWorkspaceToMonitor(ws, ref->lock(), true, false);
-    (*ref)->changeWorkspace(ws, false, true, Desktop::focusState()->monitor() != *ref);
+    (*ref)->changeWorkspace(ws, false, true, Desktop::focusState()->activeMonitor() != *ref);
 
     return 0;
 }
@@ -182,7 +182,7 @@ static int monitorIndex(lua_State* L) {
             lua_rawseti(L, -2, i++);
         }
     } else if (key == "focused")
-        lua_pushboolean(L, mon == Desktop::focusState()->monitor());
+        lua_pushboolean(L, mon == Desktop::focusState()->activeMonitor());
     else if (key == "cm")
         lua_pushstring(L, NCMType::toString(mon->m_cmType).c_str());
     else if (key == "reserved") {

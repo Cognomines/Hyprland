@@ -14,6 +14,7 @@
 #include "../render/pass/ClearPassElement.hpp"
 #include "../render/pass/TexPassElement.hpp"
 #include "../managers/input/InputManager.hpp"
+#include "../managers/input/SeatContext.hpp"
 #include "../render/Renderer.hpp"
 #include "../render/OpenGL.hpp"
 #include "../desktop/state/FocusState.hpp"
@@ -388,7 +389,11 @@ SP<CSeat> CPointerManager::seatForDevice(SP<IHID> dev) {
             return SEAT;
     }
 
-    return g_pSeatManager->defaultSeat();
+    // no driving device (e.g. keybind-triggered cursor warps): route to the
+    // ambient seat so a bind pressed on a foreign seat moves that seat's
+    // cursor instead of always the default seat's. Outside a bind scope the
+    // ambient seat is the default seat, so behavior is unchanged.
+    return Input::ambientSeat();
 }
 
 Vector2D& CPointerManager::posRefFor(SP<CSeat> seat) {

@@ -205,7 +205,7 @@ static int dsp_dpms(lua_State* L) {
     std::optional<PHLMONITOR> mon    = std::nullopt;
 
     if (!lua_isnil(L, lua_upvalueindex(2))) {
-        auto m = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(2))).run();
+        auto m = State::monitorState()->query().relativeTo(Desktop::focusState()->activeMonitor()).configString(lua_tostring(L, lua_upvalueindex(2))).run();
         if (m)
             mon = m;
     }
@@ -476,7 +476,7 @@ static int dsp_fullscreenWindowWithAction(lua_State* L) {
     if (actionRaw == 0)
         return Internal::checkResult(L, CA::fullscreenWindow(mode, layoutAware, maybeW));
 
-    const auto target = maybeW.value_or(Desktop::focusState()->window());
+    const auto target = maybeW.value_or(Desktop::focusState()->activeWindow());
     if (!target)
         return Internal::dispatcherError(L, "hl.window.fullscreen: no target", WARN, C_NOTARGET);
 
@@ -504,7 +504,7 @@ static int dsp_fullscreenState(lua_State* L) {
     bool       layoutAware     = lua_toboolean(L, lua_upvalueindex(4));
     auto       maybeW          = Internal::windowFromUpval(L, 5);
 
-    const auto target = maybeW.value_or(Desktop::focusState()->window());
+    const auto target = maybeW.value_or(Desktop::focusState()->activeWindow());
     if (!target)
         return Internal::pushSuccessResult(L);
 
@@ -1051,7 +1051,7 @@ static int dsp_moveFocus(lua_State* L) {
 }
 
 static int dsp_focusMonitor(lua_State* L) {
-    const auto PMONITOR = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(1))).run();
+    const auto PMONITOR = State::monitorState()->query().relativeTo(Desktop::focusState()->activeMonitor()).configString(lua_tostring(L, lua_upvalueindex(1))).run();
     if (!PMONITOR)
         return Internal::dispatcherError(L, "hl.focus.monitor: monitor not found", WARN, C_NOTFOUND);
     return Internal::checkResult(L, CA::focusMonitor(PMONITOR));
@@ -1157,7 +1157,7 @@ static int dsp_toggleSpecial(lua_State* L) {
 
     auto ws = State::workspaceState()->query().id(workspaceID).run();
     if (!ws) {
-        const auto PMONITOR = Desktop::focusState()->monitor();
+        const auto PMONITOR = Desktop::focusState()->activeMonitor();
         if (PMONITOR)
             ws = State::workspaceState()->create(workspaceID, PMONITOR->m_id, workspaceName);
     }
@@ -1192,25 +1192,25 @@ static int dsp_moveWorkspaceToMonitor(lua_State* L) {
     const auto PWORKSPACE = State::workspaceState()->query().id(WORKSPACEID).run();
     if (!PWORKSPACE)
         return Internal::dispatcherError(L, "Workspace not found", WARN, C_NOTFOUND);
-    const auto PMONITOR = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(2))).run();
+    const auto PMONITOR = State::monitorState()->query().relativeTo(Desktop::focusState()->activeMonitor()).configString(lua_tostring(L, lua_upvalueindex(2))).run();
     if (!PMONITOR)
         return Internal::dispatcherError(L, "Monitor not found", WARN, C_NOTFOUND);
     return Internal::checkResult(L, CA::moveToMonitor(PWORKSPACE, PMONITOR));
 }
 
 static int dsp_moveCurrentWorkspaceToMonitor(lua_State* L) {
-    const auto PMONITOR = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(1))).run();
+    const auto PMONITOR = State::monitorState()->query().relativeTo(Desktop::focusState()->activeMonitor()).configString(lua_tostring(L, lua_upvalueindex(1))).run();
     if (!PMONITOR)
         return Internal::dispatcherError(L, "Monitor not found", WARN, C_NOTFOUND);
-    const auto PCURRENTWORKSPACE = Desktop::focusState()->monitor()->m_activeWorkspace;
+    const auto PCURRENTWORKSPACE = Desktop::focusState()->activeMonitor()->m_activeWorkspace;
     if (!PCURRENTWORKSPACE)
         return Internal::dispatcherError(L, "Invalid workspace", ERR, C_INVARG);
     return Internal::checkResult(L, CA::moveToMonitor(PCURRENTWORKSPACE, PMONITOR));
 }
 
 static int dsp_swapActiveWorkspaces(lua_State* L) {
-    const auto PMON1 = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(1))).run();
-    const auto PMON2 = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(2))).run();
+    const auto PMON1 = State::monitorState()->query().relativeTo(Desktop::focusState()->activeMonitor()).configString(lua_tostring(L, lua_upvalueindex(1))).run();
+    const auto PMON2 = State::monitorState()->query().relativeTo(Desktop::focusState()->activeMonitor()).configString(lua_tostring(L, lua_upvalueindex(2))).run();
     if (!PMON1 || !PMON2)
         return Internal::dispatcherError(L, "Monitor not found", WARN, C_NOTFOUND);
     return Internal::checkResult(L, CA::swapActiveWorkspaces(PMON1, PMON2));

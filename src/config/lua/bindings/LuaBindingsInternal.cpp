@@ -71,7 +71,7 @@ PHLMONITOR Internal::monitorFromLuaSelectorOrObject(lua_State* L, int idx, const
         return ref->lock();
 
     if (lua_isstring(L, idx) || lua_isnumber(L, idx))
-        return State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(argStr(L, idx)).run();
+        return State::monitorState()->query().relativeTo(Desktop::focusState()->activeMonitor()).configString(argStr(L, idx)).run();
 
     Internal::configError(L, "{}: expected a monitor object or selector", fnName);
     return nullptr;
@@ -404,7 +404,7 @@ PHLWORKSPACE Internal::resolveWorkspaceStr(const std::string& args) {
 
     auto ws = State::workspaceState()->query().id(id).run();
     if (!ws) {
-        const auto PMONITOR = Desktop::focusState()->monitor();
+        const auto PMONITOR = Desktop::focusState()->activeMonitor();
         if (PMONITOR)
             ws = State::workspaceState()->create(id, PMONITOR->m_id, name, false);
     }
@@ -413,7 +413,7 @@ PHLWORKSPACE Internal::resolveWorkspaceStr(const std::string& args) {
 }
 
 PHLMONITOR Internal::resolveMonitorStr(const std::string& args) {
-    auto mon = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(args).run();
+    auto mon = State::monitorState()->query().relativeTo(Desktop::focusState()->activeMonitor()).configString(args).run();
     return mon;
 }
 

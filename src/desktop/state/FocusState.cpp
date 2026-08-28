@@ -7,7 +7,11 @@
 #include "../../render/Renderer.hpp"
 #include "../../ipc/s2/S2.hpp"
 #include "../../managers/input/InputManager.hpp"
+#include "../../managers/input/Seat.hpp"
+#include "../../managers/input/SeatContext.hpp"
 #include "../../managers/SeatManager.hpp"
+#include "../../pointer/PointerManager.hpp"
+#include "../../state/MonitorState.hpp"
 #include "../../protocols/PointerConstraints.hpp"
 #include "animation/WorkspaceAnimationController.hpp"
 #include "../../managers/fullscreen/FullscreenController.hpp"
@@ -307,6 +311,41 @@ PHLWINDOW CFocusState::window() {
 
 PHLMONITOR CFocusState::monitor() {
     return m_ambientMonitorOverride ? m_ambientMonitorOverride : m_focusMonitor.lock();
+}
+
+PHLWINDOW CFocusState::activeWindow() {
+    if (m_ambientWindowOverride)
+        return m_ambientWindowOverride;
+
+    const auto SEAT = Input::ambientSeat();
+    if (SEAT && !SEAT->isDefault()) {
+        const auto FOREIGN = SEAT->m_focusWindow.lock();
+        if (FOREIGN)
+            return FOREIGN;
+    }
+
+    return m_focusWindow.lock();
+}
+
+PHLMONITOR CFocusState::activeMonitor() {
+    if (m_ambientMonitorOverride)
+        return m_ambientMonitorOverride;
+
+    // a foreign seat's focused monitor is tracked per seat (synced together
+    // with m_focusWindow on keyboard focus, and by focus actions); prefer it
+    // over the cursor position so a bind on a foreign seat reports the right
+    // monitor even when cursor warps are disabled. Cursor position is the
+    // fallback for hover-driven resolution; the singleton caps everything.
+    const auto SEAT = Input::ambientSeat();
+    if (SEAT && !SEAT->isDefault()) {
+        if (const auto FOCUSMON = SEAT->m_focusMonitor.lock(); FOCUSMON)
+            return FOCUSMON;
+
+        if (const auto MONITOR = State::monitorState()->query().vec(Pointer::mgr()->position(SEAT)).run(); MONITOR)
+            return MONITOR;
+    }
+
+    return m_focusMonitor.lock();
 }
 
 void CFocusState::setAmbientOverride(PHLWINDOW window, PHLMONITOR monitor) {

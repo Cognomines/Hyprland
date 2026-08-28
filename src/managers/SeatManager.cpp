@@ -263,6 +263,8 @@ static void sendSyntheticKeyReleases(const SP<CSeat>& seat, const WP<CWLKeyboard
     seat->m_pressedClient = nullptr;
 }
 
+static PHLWINDOW windowFromFocusSurface(SP<CWLSurfaceResource> surf);
+
 void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf) {
     if (!seat || seat->isDefault()) {
         setKeyboardFocusDefault(surf);
@@ -305,6 +307,18 @@ void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf)
 
     seat->m_keyboardFocusResource.reset();
     seat->m_keyboardFocus = surf;
+
+    // keep the seat's own focus window in sync: binds route through the
+    // ambient seat, so a bind-driven focus on a foreign seat would otherwise
+    // never update m_focusWindow (only the mouse path does) and activeWindow()
+    // would keep returning the stale value. Mirror the window's monitor into
+    // m_focusMonitor so per-seat monitor focus survives disabled cursor warps.
+    const auto FOCUSWINDOW = windowFromFocusSurface(surf);
+    seat->m_focusWindow    = FOCUSWINDOW;
+    if (FOCUSWINDOW)
+        seat->m_focusMonitor = FOCUSWINDOW->m_monitor;
+    else
+        seat->m_focusMonitor.reset();
 
     if (!surf) {
         m_events.keyboardFocusChange.emit();
