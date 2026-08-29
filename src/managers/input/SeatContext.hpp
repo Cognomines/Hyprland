@@ -4,6 +4,9 @@
 
 class CSeat;
 struct wl_client;
+namespace Monitor {
+    class CMonitor;
+}
 
 /*
     Short-lived context for "current seat" semantics: bind execution, IPC
@@ -26,6 +29,11 @@ namespace Input {
     // it is the default seat and a foreign seat last clicked/typed into the
     // client (menus opened by a click, launchers spawned from them)
     SP<CSeat> seatForSurfacePlacement(SP<CSeat> spawnSeat, wl_client* client);
+
+    // the monitor a foreign seat spawns onto: where it is working (focused
+    // window's monitor, else the monitor it last focused), falling back to
+    // its cursor position. Returns null for the default seat.
+    SP<Monitor::CMonitor> seatTargetMonitor(SP<CSeat> seat);
 
     // pushes onto the ambient-seat stack until destroyed; nesting supported
     struct SScopedAmbientSeat {

@@ -40,13 +40,7 @@ PHLLS CLayerSurface::create(SP<CLayerShellResource> resource) {
     if (SURF) {
         auto SEAT = Input::seatForSurfacePlacement(Input::seatForClient(SURF->client()), SURF->client());
         if (SEAT && !SEAT->isDefault()) {
-            auto SEATMONITOR = State::monitorState()->query().vec(Pointer::mgr()->position(SEAT)).run();
-            // a seat whose cursor never moved (e.g. keyboard-only) has a
-            // position of {0,0} that resolves to whatever monitor owns the
-            // origin; use the monitor it last focused instead
-            if (!SEATMONITOR)
-                SEATMONITOR = SEAT->m_focusMonitor.lock();
-            if (SEATMONITOR) {
+            if (auto SEATMONITOR = Input::seatTargetMonitor(SEAT)) {
                 Log::logger->log(Log::INFO, "[seatmgr] layer surface '{}' spawned by seat '{}', placing on monitor {}", resource->m_layerNamespace, SEAT->name(),
                                  SEATMONITOR->m_name);
                 pMonitor = SEATMONITOR;

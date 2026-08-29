@@ -2,9 +2,16 @@
 #include "../SeatManager.hpp"
 #include "PidSeatRegistry.hpp"
 
+#include "../../desktop/view/window/Window.hpp"
+#include "../../output/Monitor.hpp"
+#include "../../state/MonitorState.hpp"
+#include "../../pointer/PointerManager.hpp"
+
 #include <cstdio>
 #include <fstream>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <wayland-server-core.h>
@@ -42,6 +49,31 @@ namespace Input {
                 return 0;
 
             return ppid;
+        }
+
+        // spawn marker set by the executor; lets processes that escaped the
+        // pid registry chain (re-parented launchers, dbus activation) still
+        // resolve their seat
+        constexpr std::string_view SEAT_ENV_MARKER = "HYPRLAND_LOGICAL_SEAT=";
+
+        std::optional<std::string> seatNameFromEnviron(pid_t pid) {
+            std::ifstream f("/proc/" + std::to_string(pid) + "/environ");
+            if (!f.good())
+                return std::nullopt;
+
+            // entries are NUL-separated KEY=VALUE strings; the marker is a
+            // full entry, so match at entry boundaries
+            std::string buf{std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+            for (size_t pos = 0; pos < buf.size();) {
+                const size_t       end   = buf.find('\0', pos);
+                const size_t       len   = (end == std::string::npos ? buf.size() : end) - pos;
+                const std::string_view entry{buf.data() + pos, len};
+                if (entry.starts_with(SEAT_ENV_MARKER))
+                    return std::string{entry.substr(SEAT_ENV_MARKER.size())};
+                pos = end + 1;
+            }
+
+            return std::nullopt;
         }
     }
 
@@ -91,7 +123,19 @@ namespace Input {
             return g_pSeatManager->defaultSeat();
         }
 
-        Log::logger->log(Log::DEBUG, "[seatmgr] seatForPid pid {} -> no registry entry in {} process(es), default", pid, examined);
+            Log::logger->log(Log::DEBUG, "[seatmgr] seatForPid pid {} -> no registry entry in {} process(es), default", pid, examined);
+
+        // the process tree gave nothing: the spawn marker survives even a
+        // broken ancestry (re-parented launchers), so try the environment
+        if (const auto NAME = seatNameFromEnviron(pid); NAME && !NAME->empty()) {
+            for (auto const& s : g_pSeatManager->seats()) {
+                if (s->name() == *NAME && !s->isDefault()) {
+                    Log::logger->log(Log::DEBUG, "[seatmgr] seatForPid pid {} -> env seat '{}'", pid, *NAME);
+                    return s;
+                }
+            }
+        }
+
         return g_pSeatManager->defaultSeat();
     }
 
@@ -110,5 +154,21 @@ namespace Input {
             return spawnSeat;
 
         return g_pSeatManager->lastInteractingSeat(client);
+    }
+
+    SP<Monitor::CMonitor> seatTargetMonitor(SP<CSeat> seat) {
+        if (!seat || seat->isDefault())
+            return nullptr;
+
+        // where the seat is working beats where its cursor happens to be
+        if (const auto FOCUSED = seat->m_focusWindow.lock(); FOCUSED) {
+            if (const auto MON = FOCUSED->m_monitor.lock())
+                return MON;
+        }
+
+        if (const auto MON = seat->m_focusMonitor.lock())
+            return MON;
+
+        return State::monitorState()->query().vec(Pointer::mgr()->position(seat)).run();
     }
 }
