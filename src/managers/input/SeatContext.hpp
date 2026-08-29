@@ -22,6 +22,11 @@ namespace Input {
     // seatForClient resolved straight from a raw pid
     SP<CSeat> seatForPid(pid_t pid);
 
+    // placement seat for a newly mapped surface: the spawning seat, unless
+    // it is the default seat and a foreign seat last clicked/typed into the
+    // client (menus opened by a click, launchers spawned from them)
+    SP<CSeat> seatForSurfacePlacement(SP<CSeat> spawnSeat, wl_client* client);
+
     // pushes onto the ambient-seat stack until destroyed; nesting supported
     struct SScopedAmbientSeat {
         explicit SScopedAmbientSeat(SP<CSeat> seat);

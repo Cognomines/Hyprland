@@ -1149,12 +1149,9 @@ void CWindow::mapWindow() {
     // owned by the default seat can still be driven by a foreign seat: a
     // menu opened by its click (or an app launched from it) belongs on the
     // interacting seat's screen, so the last click/keystroke wins here.
-    auto SEAT = Input::seatForPid(m_backend->pid());
-    if (SEAT && SEAT->isDefault()) {
-        const auto SURF = wlSurface();
-        if (SURF && SURF->resource())
-            SEAT = g_pSeatManager->lastInteractingSeat(SURF->resource()->client());
-    }
+    const auto SURF    = wlSurface();
+    wl_client*  CLIENT = SURF && SURF->resource() ? SURF->resource()->client() : nullptr;
+    auto        SEAT   = Input::seatForSurfacePlacement(Input::seatForPid(m_backend->pid()), CLIENT);
 
     if (SEAT && !SEAT->isDefault()) {
         auto SEATMONITOR = State::monitorState()->query().vec(Pointer::mgr()->position(SEAT)).run();

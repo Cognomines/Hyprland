@@ -7,6 +7,8 @@
 #include "../../protocols/LayerShell.hpp"
 #include "../../protocols/core/Compositor.hpp"
 #include "../../managers/SeatManager.hpp"
+#include "../../managers/input/SeatContext.hpp"
+#include "../../pointer/PointerManager.hpp"
 #include "../../animation/AnimationManager.hpp"
 #include "../../render/Renderer.hpp"
 #include "../../config/shared/animation/AnimationTree.hpp"
@@ -26,7 +28,31 @@ using namespace Desktop::View;
 PHLLS CLayerSurface::create(SP<CLayerShellResource> resource) {
     PHLLS pLS = SP<CLayerSurface>(new CLayerSurface(resource));
 
-    auto  pMonitor = resource->m_monitor.empty() ? Desktop::focusState()->monitor() : State::monitorState()->query().name(resource->m_monitor).run();
+    auto pMonitor = resource->m_monitor.empty() ? Desktop::focusState()->monitor() : State::monitorState()->query().name(resource->m_monitor).run();
+
+    // logical seats: a layer surface mapped by a foreign-seat client (rofi,
+    // launcher menus) belongs on that seat's screen, not on the default
+    // seat's focus monitor. Resolution mirrors mapWindow: the spawning
+    // seat, or the seat that last clicked/typed into a default-seat client.
+    // An output the client picked explicitly is overridden too: layer
+    // clients are seat-unaware and would keep the default seat's screen.
+    const auto SURF = resource->m_surface.lock();
+    if (SURF) {
+        auto SEAT = Input::seatForSurfacePlacement(Input::seatForClient(SURF->client()), SURF->client());
+        if (SEAT && !SEAT->isDefault()) {
+            auto SEATMONITOR = State::monitorState()->query().vec(Pointer::mgr()->position(SEAT)).run();
+            // a seat whose cursor never moved (e.g. keyboard-only) has a
+            // position of {0,0} that resolves to whatever monitor owns the
+            // origin; use the monitor it last focused instead
+            if (!SEATMONITOR)
+                SEATMONITOR = SEAT->m_focusMonitor.lock();
+            if (SEATMONITOR) {
+                Log::logger->log(Log::INFO, "[seatmgr] layer surface '{}' spawned by seat '{}', placing on monitor {}", resource->m_layerNamespace, SEAT->name(),
+                                 SEATMONITOR->m_name);
+                pMonitor = SEATMONITOR;
+            }
+        }
+    }
 
     pLS->m_wlSurface->assign(resource->m_surface.lock(), pLS);
 
