@@ -1145,12 +1145,26 @@ void CWindow::mapWindow() {
     }
 
     // logical seats: a client spawns where its spawning seat's cursor lives,
-    // not where the default seat's global focus monitor points
-    const auto SPAWNSEAT = Input::seatForPid(m_backend->pid());
-    if (SPAWNSEAT && !SPAWNSEAT->isDefault()) {
-        const auto SEATMONITOR = State::monitorState()->query().vec(Pointer::mgr()->position(SPAWNSEAT)).run();
+    // not where the default seat's global focus monitor points. A client
+    // owned by the default seat can still be driven by a foreign seat: a
+    // menu opened by its click (or an app launched from it) belongs on the
+    // interacting seat's screen, so the last click/keystroke wins here.
+    auto SEAT = Input::seatForPid(m_backend->pid());
+    if (SEAT && SEAT->isDefault()) {
+        const auto SURF = wlSurface();
+        if (SURF && SURF->resource())
+            SEAT = g_pSeatManager->lastInteractingSeat(SURF->resource()->client());
+    }
+
+    if (SEAT && !SEAT->isDefault()) {
+        auto SEATMONITOR = State::monitorState()->query().vec(Pointer::mgr()->position(SEAT)).run();
+        // a seat whose cursor never moved (e.g. keyboard-only) has a position
+        // of {0,0} that resolves to whatever monitor owns the origin; use the
+        // monitor it last focused instead so spawns still land on its screen
+        if (!SEATMONITOR)
+            SEATMONITOR = SEAT->m_focusMonitor.lock();
         if (SEATMONITOR) {
-            Log::logger->log(Log::INFO, "[seatmgr] window {:x} spawned by seat '{}', placing on monitor {}", (uintptr_t)this, SPAWNSEAT->name(), SEATMONITOR->m_name);
+            Log::logger->log(Log::INFO, "[seatmgr] window {:x} spawned by seat '{}', placing on monitor {}", (uintptr_t)this, SEAT->name(), SEATMONITOR->m_name);
             PMONITOR = SEATMONITOR;
         }
     }
@@ -1432,9 +1446,9 @@ void CWindow::mapWindow() {
     ) {
         // add to group if we are focused on one
         Desktop::focusState()->window()->grouping().group()->add(m_self.lock());
-    } else if (SPAWNSEAT && !SPAWNSEAT->isDefault()) {
+    } else if (SEAT && !SEAT->isDefault()) {
         // layout split direction follows the spawning seat's cursor
-        const Input::SScopedAmbientSeat SEAT_SCOPE{SPAWNSEAT};
+        const Input::SScopedAmbientSeat SEAT_SCOPE{SEAT};
         g_layoutManager->newTarget(m_target, m_workspace->m_space);
     } else
         g_layoutManager->newTarget(m_target, m_workspace->m_space);
@@ -1505,8 +1519,8 @@ void CWindow::mapWindow() {
         if (!m_backend->isX11() || !g_pInputManager->hasHeldButtons() || !TRAITS.overrideRedirect) {
             // logical seats: a window spawned by a foreign seat focuses its spawning seat
             // only, so the default seat's global focus and monitor stay where they are
-            if (SPAWNSEAT && !SPAWNSEAT->isDefault())
-                g_pSeatManager->setKeyboardFocus(SPAWNSEAT, m_backend->surface());
+            if (SEAT && !SEAT->isDefault())
+                g_pSeatManager->setKeyboardFocus(SEAT, m_backend->surface());
             else
                 Desktop::focusState()->fullWindowFocus(m_self.lock(), FOCUS_REASON_NEW_WINDOW);
         }

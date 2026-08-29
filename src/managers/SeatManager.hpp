@@ -9,7 +9,8 @@
 #include "input/Seat.hpp"
 #include <vector>
 
-constexpr size_t MAX_SERIAL_STORE_LEN = 100;
+constexpr size_t MAX_SERIAL_STORE_LEN      = 100;
+constexpr size_t MAX_CLIENT_INTERACTIONS   = 128;
 
 class CWLSurfaceResource;
 class CWLSeatResource;
@@ -81,6 +82,13 @@ class CSeatManager {
 
     // true when any seat (default included) keeps keyboard focus on this window
     bool isWindowKeyboardFocusedAnywhere(PHLWINDOW window);
+
+    // last seat that sent a pointer button or key into a client. Windows the
+    // client maps afterwards (menus opened by a click, apps launched from
+    // them) are placed on the interacting seat's screen instead of the
+    // default seat's. Only non-default seats are reported.
+    void      noteClientInteraction(wl_client* client, SP<CSeat> seat);
+    SP<CSeat> lastInteractingSeat(wl_client* client);
 
   private:
     // fan a key event out to a client's keyboard resources, preferring the
@@ -194,6 +202,12 @@ class CSeatManager {
     SP<SSeatResourceContainer>              containerForResource(SP<CWLSeatResource> seatResource);
 
     std::vector<SP<CSeat>>                  m_seats;
+
+    struct SClientInteraction {
+        wl_client*  client = nullptr;
+        std::string seatName;
+    };
+    std::vector<SClientInteraction>         m_clientInteractions;
 
     void                                    refocusGrab();
 

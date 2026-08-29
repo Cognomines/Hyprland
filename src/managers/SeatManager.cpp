@@ -59,6 +59,32 @@ SP<CSeat> CSeatManager::seatByName(const std::string& name) {
     return nullptr;
 }
 
+void CSeatManager::noteClientInteraction(wl_client* client, SP<CSeat> seat) {
+    if (!client || !seat)
+        return;
+
+    std::erase_if(m_clientInteractions, [client](const auto& other) { return other.client == client; });
+    m_clientInteractions.push_back({client, seat->name()});
+
+    if (m_clientInteractions.size() > MAX_CLIENT_INTERACTIONS)
+        m_clientInteractions.erase(m_clientInteractions.begin());
+}
+
+SP<CSeat> CSeatManager::lastInteractingSeat(wl_client* client) {
+    if (!client)
+        return nullptr;
+
+    for (auto const& i : m_clientInteractions | std::views::reverse) {
+        if (i.client != client)
+            continue;
+
+        const auto SEAT = seatByName(i.seatName);
+        return SEAT && !SEAT->isDefault() ? SEAT : nullptr;
+    }
+
+    return nullptr;
+}
+
 SP<CSeat> CSeatManager::ensureSeat(const std::string& name) {
     if (isDefaultLibinputSeatName(name) || name == DEFAULT_SEAT_NAME)
         return defaultSeat();
@@ -578,6 +604,9 @@ void CSeatManager::sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key
         return;
     }
 
+    if (state_ == WL_KEYBOARD_KEY_STATE_PRESSED)
+        noteClientInteraction(TARGET, seat);
+
     deliverKeyboardKey(TARGET, seat, timeMs, key, state_);
     if (state_ == WL_KEYBOARD_KEY_STATE_PRESSED && seat && !seat->m_pressed.empty())
         seat->m_pressedClient = TARGET;
@@ -912,6 +941,8 @@ void CSeatManager::sendPointerButton(SP<CSeat> seat, uint32_t timeMs, uint32_t k
     }
     if (!FOCUS)
         return;
+
+    noteClientInteraction(FOCUS->client(), seat);
 
     // P3-lite delivery fallback: see sendKeyboardKey
     bool hasOwned = false;

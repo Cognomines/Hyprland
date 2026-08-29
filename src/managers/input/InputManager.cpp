@@ -753,6 +753,11 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
                 PREVHOVER->presentation().updateDecorations();
         }
 
+        // like the default tail: keep motion flowing so clients see hover
+        // updates (e.g. bar button highlights) while the cursor glides
+        if (!overridePos.has_value())
+            g_pSeatManager->sendPointerMotion(SEAT, time, surfaceLocal);
+
         return;
     }
 
