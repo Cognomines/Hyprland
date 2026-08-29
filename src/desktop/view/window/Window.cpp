@@ -1144,23 +1144,18 @@ void CWindow::mapWindow() {
         PMONITOR = Desktop::focusState()->monitor();
     }
 
-    // logical seats: a client spawns where its spawning seat's cursor lives,
-    // not where the default seat's global focus monitor points. A client
-    // owned by the default seat can still be driven by a foreign seat: a
-    // menu opened by its click (or an app launched from it) belongs on the
-    // interacting seat's screen, so the last click/keystroke wins here.
+    // logical seats: a client spawns where its spawning seat is working (its
+    // focused window's monitor, cursor as fallback), not where the default
+    // seat's global focus monitor points. A client owned by the default seat
+    // can still be driven by a foreign seat: a menu opened by its click (or
+    // an app launched from it) belongs on the interacting seat's screen, so
+    // the last click/keystroke wins here.
     const auto SURF    = wlSurface();
     wl_client*  CLIENT = SURF && SURF->resource() ? SURF->resource()->client() : nullptr;
     auto        SEAT   = Input::seatForSurfacePlacement(Input::seatForPid(m_backend->pid()), CLIENT);
 
     if (SEAT && !SEAT->isDefault()) {
-        auto SEATMONITOR = State::monitorState()->query().vec(Pointer::mgr()->position(SEAT)).run();
-        // a seat whose cursor never moved (e.g. keyboard-only) has a position
-        // of {0,0} that resolves to whatever monitor owns the origin; use the
-        // monitor it last focused instead so spawns still land on its screen
-        if (!SEATMONITOR)
-            SEATMONITOR = SEAT->m_focusMonitor.lock();
-        if (SEATMONITOR) {
+        if (auto SEATMONITOR = Input::seatTargetMonitor(SEAT)) {
             Log::logger->log(Log::INFO, "[seatmgr] window {:x} spawned by seat '{}', placing on monitor {}", (uintptr_t)this, SEAT->name(), SEATMONITOR->m_name);
             PMONITOR = SEATMONITOR;
         }

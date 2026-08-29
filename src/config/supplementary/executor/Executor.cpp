@@ -191,6 +191,11 @@ std::optional<uint64_t> CExecutor::spawnRawProc(const std::string& args, PHLWORK
         for (auto const& e : HLENV) {
             setenv(e.first.c_str(), e.second.c_str(), 1);
         }
+        // logical seats: tag the spawn so descendants that outlive the pid
+        // registry chain (re-parented launchers, dbus activation) still
+        // resolve to their spawning seat
+        if (const auto SEAT = Input::ambientSeat(); SEAT && !SEAT->isDefault())
+            setenv("HYPRLAND_LOGICAL_SEAT", SEAT->name().c_str(), 1);
         setenv("WAYLAND_DISPLAY", g_pCompositor->m_wlDisplaySocket.c_str(), 1);
         if (!execRuleToken.empty())
             setenv(Desktop::Rule::EXEC_RULE_ENV_NAME, execRuleToken.c_str(), true);
