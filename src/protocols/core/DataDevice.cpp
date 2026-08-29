@@ -577,6 +577,10 @@ void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource
     m_dnd.currentSource = currentSource;
     m_dnd.originSurface = origin;
     m_dnd.dndSurface    = dragSurface;
+    // anchor the drag icon to the seat that grabbed, not the default seat:
+    // at render time no ambient seat scope is active, so the icon would
+    // otherwise follow the default seat's cursor while another seat drags
+    m_dnd.seat = g_pSeatManager->lastInteractingSeat(origin ? origin->client() : nullptr);
     if (dragSurface) {
         m_dnd.dndSurfaceDestroy = dragSurface->m_events.destroy.listen([this] { abortDrag(); });
         m_dnd.dndSurfaceCommit  = dragSurface->m_events.commit.listen([this] {
@@ -721,6 +725,7 @@ void CWLDataDeviceProtocol::cleanupDndState(bool resetDevice, bool resetSource, 
     m_dnd.touchUp.reset();
     m_dnd.touchMove.reset();
     m_dnd.touchPos.reset();
+    m_dnd.seat.reset();
     m_dnd.tabletTip.reset();
 
     if (resetDevice)
@@ -830,7 +835,8 @@ void CWLDataDeviceProtocol::renderDND(PHLMONITOR pMonitor, const Time::steady_tp
     if (!m_dnd.dndSurface || !m_dnd.dndSurface->m_current.texture)
         return;
 
-    const auto POS = m_dnd.touchPos.value_or(g_pInputManager->getMouseCoordsInternal());
+    const auto SEAT = m_dnd.seat.lock();
+    const auto POS  = m_dnd.touchPos.value_or(SEAT ? Pointer::mgr()->position(SEAT) : g_pInputManager->getMouseCoordsInternal());
 
     Vector2D   surfacePos = POS;
 

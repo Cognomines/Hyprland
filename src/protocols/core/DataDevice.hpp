@@ -26,6 +26,7 @@ class CWLDataSourceResource;
 class CWLDataOfferResource;
 
 class CWLSurfaceResource;
+class CSeat;
 
 class CWLDataOfferResource : public IDataOffer {
   public:
@@ -169,10 +170,13 @@ class CWLDataDeviceProtocol : public IWaylandProtocol {
     void onDndPointerFocus();
 
     struct {
-        WP<IDataDevice>         focusedDevice;
-        WP<IDataSource>         currentSource;
-        WP<CWLSurfaceResource>  dndSurface;
-        WP<CWLSurfaceResource>  originSurface;
+        WP<IDataDevice>        focusedDevice;
+        WP<IDataSource>        currentSource;
+        WP<CWLSurfaceResource> dndSurface;
+        WP<CWLSurfaceResource> originSurface;
+        // logical seat whose implicit grab started the drag; empty when the
+        // default seat did, in which case the legacy global cursor is used
+        WP<CSeat>               seat;
         std::optional<Vector2D> touchPos;
         bool                    overriddenCursor = false;
         CHyprSignalListener     dndSurfaceDestroy;
