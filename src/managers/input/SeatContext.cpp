@@ -101,4 +101,14 @@ namespace Input {
 
         return seatForPid(pid);
     }
+
+    SP<CSeat> seatForSurfacePlacement(SP<CSeat> spawnSeat, wl_client* client) {
+        if (spawnSeat && !spawnSeat->isDefault())
+            return spawnSeat;
+
+        if (!client || !g_pSeatManager)
+            return spawnSeat;
+
+        return g_pSeatManager->lastInteractingSeat(client);
+    }
 }
