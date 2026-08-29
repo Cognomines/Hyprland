@@ -19,6 +19,7 @@
 #include "../../managers/fullscreen/FullscreenController.hpp"
 #include "../../event/EventBus.hpp"
 #include "../../state/MonitorState.hpp"
+#include "../state/ViewState.hpp"
 #include "popup/WaylandPopupBackend.hpp"
 #include "Popup.hpp"
 
@@ -230,7 +231,17 @@ void CLayerSurface::onMap() {
             g_pSeatManager->setGrab(nullptr);
 
         g_pInputManager->releaseAllMouseButtons();
-        Desktop::focusState()->rawSurfaceFocus(m_wlSurface->resource());
+
+        // logical seats: a keyboard-grabbing layer surface (rofi, menus) takes
+        // the keyboard of the seat that spawned/interacted with its client, so
+        // it wins over xdg-toplevels there; the default seat keeps the global
+        // focus path
+        const auto SURF = m_wlSurface->resource();
+        if (const auto SEAT = Input::seatForSurfacePlacement(Input::seatForClient(SURF->client()), SURF->client()); SEAT && !SEAT->isDefault()) {
+            Log::logger->log(Log::INFO, "[seatmgr] layer surface '{}' grabs keyboard of seat '{}'", m_namespace, SEAT->name());
+            g_pSeatManager->setKeyboardFocus(SEAT, SURF);
+        } else
+            Desktop::focusState()->rawSurfaceFocus(SURF);
     }
 
     // update pointer focus
@@ -304,6 +315,34 @@ void CLayerSurface::onUnmap() {
             g_pInputManager->refocus();
     } else if (Desktop::focusState()->surface() && Desktop::focusState()->surface() != m_wlSurface->resource())
         g_pSeatManager->setKeyboardFocus(Desktop::focusState()->surface());
+
+    // logical seats: refocus any foreign seat keyboard-focused on this LS,
+    // mirroring the per-seat window focus-on-close path. Candidates come
+    // from the seat's cursor monitor only (no layout candidate here).
+    const auto LS_SURF = m_wlSurface->resource();
+    for (auto const& s : g_pSeatManager->seats()) {
+        if (!s || s->isDefault() || s->m_keyboardFocus.lock() != LS_SURF)
+            continue;
+
+        const auto SEAT_CURSOR_POS = Pointer::mgr()->position(s);
+        const auto SEAT_MONITOR    = State::monitorState()->query().vec(SEAT_CURSOR_POS).run();
+
+        PHLWINDOW seatCandidate = nullptr;
+        if (SEAT_MONITOR) {
+            seatCandidate = Desktop::viewState()->hitTest().windowAt(SEAT_CURSOR_POS, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+            // only focus windows on the same monitor as the seat's cursor
+            if (seatCandidate && seatCandidate->m_monitor.lock() != SEAT_MONITOR)
+                seatCandidate = nullptr;
+        }
+
+        if (seatCandidate) {
+            Log::logger->log(Log::INFO, "[seatmgr] seat '{}' loses focused layer surface, refocusing window {:mw}", s->name(), seatCandidate);
+            g_pSeatManager->setKeyboardFocus(s, seatCandidate->wlSurface()->resource());
+        } else {
+            Log::logger->log(Log::INFO, "[seatmgr] seat '{}' loses focused layer surface, clearing focus", s->name());
+            g_pSeatManager->setKeyboardFocus(s, nullptr);
+        }
+    }
 
     CBox geomFixed = {m_geometry.x + PMONITOR->m_position.x, m_geometry.y + PMONITOR->m_position.y, m_geometry.width, m_geometry.height};
     g_pHyprRenderer->damageBox(geomFixed);
