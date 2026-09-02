@@ -185,6 +185,12 @@ void CInputManager::onTabletTip(CTablet::STipEvent e) {
     const auto PTOOL = ensureTabletToolPresent(e.tool);
     const auto POS   = e.tip;
 
+    // a tip-down may become a drag; record the triggering seat so a
+    // tablet-initiated dnd is owned by it
+    const auto TABSEAT = PTAB ? PTAB->m_seat.lock() : nullptr;
+    if (e.in && PROTO::data && TABSEAT)
+        PROTO::data->notePressSeat(TABSEAT);
+
     if (PTAB->m_relativeInput)
         Pointer::mgr()->move({0, 0});
     else

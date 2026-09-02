@@ -91,6 +91,10 @@ class CSeat {
     WP<CWLSurfaceResource> m_pointerFocus;
     WP<CWLSeatResource>    m_pointerFocusResource;
     Vector2D               m_lastPointerLocal = {0, 0};
+    // drop-target surface for a drag this seat owns; mirrors the default
+    // seat's global m_state.dndPointerFocus but lives per seat so a foreign
+    // seat's drag doesn't resolve against the default seat's cursor
+    WP<CWLSurfaceResource> m_dndPointerFocus;
     // window focused by this seat's keyboard, drives per-seat border colors
     PHLWINDOWREF m_focusWindow;
     // monitor the seat's keyboard focus currently lives on, mirrors the

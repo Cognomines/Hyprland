@@ -577,10 +577,15 @@ void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource
     m_dnd.currentSource = currentSource;
     m_dnd.originSurface = origin;
     m_dnd.dndSurface    = dragSurface;
-    // anchor the drag icon to the seat that grabbed, not the default seat:
-    // at render time no ambient seat scope is active, so the icon would
-    // otherwise follow the default seat's cursor while another seat drags
-    m_dnd.seat = g_pSeatManager->lastInteractingSeat(origin ? origin->client() : nullptr);
+    // anchor the drag to the seat that grabbed the pointer/touch, not the
+    // default seat, and not the origin surface's client (nemo-desktop is a
+    // default-seat client, so lastInteractingSeat(originClient) would wrongly
+    // attribute seat1's drag to seat0). The triggering seat is recorded by the
+    // input layer at button-press time via notePressSeat.
+    m_dnd.seat = m_dnd.pendingDragSeat;
+    m_dnd.pendingDragSeat.reset();
+    if (!m_dnd.seat)
+        m_dnd.seat = g_pSeatManager->lastInteractingSeat(origin ? origin->client() : nullptr);
     if (dragSurface) {
         m_dnd.dndSurfaceDestroy = dragSurface->m_events.destroy.listen([this] { abortDrag(); });
         m_dnd.dndSurfaceCommit  = dragSurface->m_events.commit.listen([this] {
@@ -616,8 +621,8 @@ void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource
     });
 
     m_dnd.mouseMove = Event::bus()->m_events.input.mouse.move.listen([this](Vector2D pos, Event::SCallbackInfo&) {
-        if (m_dnd.focusedDevice && g_pSeatManager->m_state.dndPointerFocus) {
-            auto surf = Desktop::View::CWLSurface::fromResource(g_pSeatManager->m_state.dndPointerFocus.lock());
+        if (m_dnd.focusedDevice) {
+            auto surf = Desktop::View::CWLSurface::fromResource(dndFocusSurface().lock());
 
             if (!surf)
                 return;
@@ -636,8 +641,8 @@ void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource
         // Mirror the mouse drag path: the input layer (CInputManager::onTouchMove)
         // refocuses dndPointerFocus from the global touch position; here we just
         // send surface-local motion against the currently focused dnd surface.
-        if (m_dnd.focusedDevice && g_pSeatManager->m_state.dndPointerFocus) {
-            auto surf = Desktop::View::CWLSurface::fromResource(g_pSeatManager->m_state.dndPointerFocus.lock());
+        if (m_dnd.focusedDevice) {
+            auto surf = Desktop::View::CWLSurface::fromResource(dndFocusSurface().lock());
 
             if (!surf)
                 return;
@@ -659,12 +664,22 @@ void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource
     // unfocus the pointer from the surface, this is part of """standard""" wayland procedure and gtk will freak out if this isn't happening.
     // BTW, the spec does NOT require this explicitly...
     // Fuck you gtk.
-    const auto LASTDNDFOCUS = g_pSeatManager->m_state.dndPointerFocus;
+    const auto LASTDNDFOCUS = dndFocusSurface();
     g_pSeatManager->setPointerFocus(nullptr, {});
-    g_pSeatManager->m_state.dndPointerFocus = LASTDNDFOCUS;
+    if (const auto SEAT = m_dnd.seat.lock(); SEAT && !SEAT->isDefault())
+        SEAT->m_dndPointerFocus = LASTDNDFOCUS;
+    else
+        g_pSeatManager->m_state.dndPointerFocus = LASTDNDFOCUS;
 
     // make a new offer, etc
     updateDrag();
+}
+
+WP<CWLSurfaceResource> CWLDataDeviceProtocol::dndFocusSurface() const {
+    const auto SEAT = m_dnd.seat.lock();
+    if (SEAT && !SEAT->isDefault())
+        return SEAT->m_dndPointerFocus;
+    return g_pSeatManager->m_state.dndPointerFocus;
 }
 
 void CWLDataDeviceProtocol::updateDrag() {
@@ -674,7 +689,7 @@ void CWLDataDeviceProtocol::updateDrag() {
     if (m_dnd.focusedDevice)
         m_dnd.focusedDevice->sendLeave();
 
-    auto surface = g_pSeatManager->m_state.dndPointerFocus.lock();
+    auto surface = dndFocusSurface().lock();
     if (!surface)
         return;
 
@@ -857,6 +872,16 @@ void CWLDataDeviceProtocol::renderDND(PHLMONITOR pMonitor, const Time::steady_tp
 
 bool CWLDataDeviceProtocol::dndActive() {
     return !!m_dnd.currentSource;
+}
+
+void CWLDataDeviceProtocol::notePressSeat(SP<CSeat> seat) {
+    if (!seat)
+        return;
+    m_dnd.pendingDragSeat = seat;
+}
+
+SP<CSeat> CWLDataDeviceProtocol::dndSeat() const {
+    return m_dnd.seat.lock();
 }
 
 void CWLDataDeviceProtocol::abortDndIfPresent() {

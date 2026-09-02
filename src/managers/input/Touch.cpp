@@ -39,6 +39,11 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     if (OWNER && OWNER->isDefault() && PMONITOR != Desktop::focusState()->monitor())
         Desktop::focusState()->rawMonitorFocus(PMONITOR);
 
+    // a touch-press may become a drag; record the triggering seat so a
+    // touch-initiated dnd is owned by it
+    if (PROTO::data && OWNER)
+        PROTO::data->notePressSeat(OWNER);
+
     const auto TOUCH_COORDS = PMONITOR->m_position + (e.pos * PMONITOR->m_size);
 
     m_touchData.lastTouchPos = TOUCH_COORDS;

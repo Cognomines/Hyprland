@@ -901,6 +901,11 @@ void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) 
     m_lastCursorMovement.reset();
 
     if (e.state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        // remember which seat pressed, so a drag started from this press is
+        // attributed to the triggering seat (even for shared/default-seat
+        // clients like nemo-desktop whose surfaces resolve to seat0)
+        if (PROTO::data)
+            PROTO::data->notePressSeat(SEAT);
         SEAT->m_currentlyHeldButtons.emplace_back(e.button, mouse);
     } else {
         if (std::ranges::find_if(SEAT->m_currentlyHeldButtons, [&](const auto& held) { return held.button == e.button && held.pointer.lock() == mouse; }) ==

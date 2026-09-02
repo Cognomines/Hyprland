@@ -756,9 +756,15 @@ void CSeatManager::setPointerFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf, 
         return;
     }
 
+    // During a drag, only the seat that owns it participates in dnd focus;
+    // all other foreign seats are excluded (single global drag, seat-locked).
     const bool dndActive = PROTO::data && PROTO::data->dndActive();
-    if (dndActive)
-        return; // foreign seats don't participate in the global dnd focus (P3-lite)
+    const auto DNDOWNER  = dndActive ? PROTO::data->m_dnd.seat.lock() : nullptr;
+    if (dndActive && (!DNDOWNER || DNDOWNER != seat))
+        return; // foreign seats don't participate in the dnd focus (P3-lite)
+
+    // remember the drag's live drop target on the owning seat
+    seat->m_dndPointerFocus = surf;
 
     if (seat->m_pointerFocus == surf)
         return;
