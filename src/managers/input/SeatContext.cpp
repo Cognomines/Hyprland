@@ -92,7 +92,7 @@ namespace Input {
 
     SScopedAmbientSeat::SScopedAmbientSeat(SP<CSeat> seat) {
         if (seat)
-            Log::logger->log(Log::DEBUG, "[seatmgr] ambient scope enter seat '{}' (depth {})", seat->name(), seatStack().size() + 1);
+            LOG(Log::DEBUG, "[seatmgr] ambient scope enter seat '{}' (depth {})", seat->name(), seatStack().size() + 1);
         seatStack().emplace_back(std::move(seat));
     }
 
@@ -119,18 +119,18 @@ namespace Input {
                     return s;
             }
 
-            Log::logger->log(Log::WARN, "[seatmgr] seatForPid pid {} -> registry seat '{}' not found, default", cur, *NAME);
+            LOG(Log::WARN, "[seatmgr] seatForPid pid {} -> registry seat '{}' not found, default", cur, *NAME);
             return g_pSeatManager->defaultSeat();
         }
 
-            Log::logger->log(Log::DEBUG, "[seatmgr] seatForPid pid {} -> no registry entry in {} process(es), default", pid, examined);
+            LOG(Log::DEBUG, "[seatmgr] seatForPid pid {} -> no registry entry in {} process(es), default", pid, examined);
 
         // the process tree gave nothing: the spawn marker survives even a
         // broken ancestry (re-parented launchers), so try the environment
         if (const auto NAME = seatNameFromEnviron(pid); NAME && !NAME->empty()) {
             for (auto const& s : g_pSeatManager->seats()) {
                 if (s->name() == *NAME && !s->isDefault()) {
-                    Log::logger->log(Log::DEBUG, "[seatmgr] seatForPid pid {} -> env seat '{}'", pid, *NAME);
+                    LOG(Log::DEBUG, "[seatmgr] seatForPid pid {} -> env seat '{}'", pid, *NAME);
                     return s;
                 }
             }

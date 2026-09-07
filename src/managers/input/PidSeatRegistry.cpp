@@ -16,7 +16,7 @@ namespace Input {
         if (m.size() >= MAX_ENTRIES)
             m.erase(m.begin()); // drop oldest; entries are consumed on bind anyway
         m.insert_or_assign(pid, seatName);
-        Log::logger->log(Log::INFO, "[seatmgr] registry: pid {} associated with seat '{}'", pid, seatName);
+        LOG(Log::INFO, "[seatmgr] registry: pid {} associated with seat '{}'", pid, seatName);
     }
 
     std::string CPidSeatRegistry::takeFor(pid_t pid) {
@@ -26,7 +26,7 @@ namespace Input {
             return "";
         auto out = std::move(it->second);
         m.erase(it);
-        Log::logger->log(Log::DEBUG, "[seatmgr] registry: pid {} consumed seat '{}'", pid, out);
+        LOG(Log::DEBUG, "[seatmgr] registry: pid {} consumed seat '{}'", pid, out);
         return out;
     }
 

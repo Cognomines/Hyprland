@@ -5,6 +5,7 @@
 #include "../helpers/signal/Signal.hpp"
 #include "../helpers/math/Math.hpp"
 #include "../protocols/types/DataDevice.hpp"
+#include "../devices/IKeyboard.hpp"
 #include "../desktop/DesktopTypes.hpp"
 #include "input/Seat.hpp"
 #include <vector>
@@ -15,7 +16,6 @@ constexpr size_t MAX_CLIENT_INTERACTIONS   = 128;
 class CWLSurfaceResource;
 class CWLSeatResource;
 class IPointer;
-class IKeyboard;
 
 class IKeyboardEventHandler {
   public:

@@ -42,7 +42,7 @@ PHLLS CLayerSurface::create(SP<CLayerShellResource> resource) {
         auto SEAT = Input::seatForSurfacePlacement(Input::seatForClient(SURF->client()), SURF->client());
         if (SEAT && !SEAT->isDefault()) {
             if (auto SEATMONITOR = Input::seatTargetMonitor(SEAT)) {
-                Log::logger->log(Log::INFO, "[seatmgr] layer surface '{}' spawned by seat '{}', placing on monitor {}", resource->m_layerNamespace, SEAT->name(),
+                LOG(Log::INFO, "[seatmgr] layer surface '{}' spawned by seat '{}', placing on monitor {}", resource->m_layerNamespace, SEAT->name(),
                                  SEATMONITOR->m_name);
                 pMonitor = SEATMONITOR;
             }
@@ -237,7 +237,7 @@ void CLayerSurface::onMap() {
         // focus path
         const auto SURF = m_wlSurface->resource();
         if (const auto SEAT = Input::seatForSurfacePlacement(Input::seatForClient(SURF->client()), SURF->client()); SEAT && !SEAT->isDefault()) {
-            Log::logger->log(Log::INFO, "[seatmgr] layer surface '{}' grabs keyboard of seat '{}'", m_namespace, SEAT->name());
+            LOG(Log::INFO, "[seatmgr] layer surface '{}' grabs keyboard of seat '{}'", m_namespace, SEAT->name());
             g_pSeatManager->setKeyboardFocus(SEAT, SURF);
         } else
             Desktop::focusState()->rawSurfaceFocus(SURF);
@@ -335,10 +335,10 @@ void CLayerSurface::onUnmap() {
         }
 
         if (seatCandidate) {
-            Log::logger->log(Log::INFO, "[seatmgr] seat '{}' loses focused layer surface, refocusing window {:mw}", s->name(), seatCandidate);
+            LOG(Log::INFO, "[seatmgr] seat '{}' loses focused layer surface, refocusing window {:mw}", s->name(), seatCandidate);
             g_pSeatManager->setKeyboardFocus(s, seatCandidate->wlSurface()->resource());
         } else {
-            Log::logger->log(Log::INFO, "[seatmgr] seat '{}' loses focused layer surface, clearing focus", s->name());
+            LOG(Log::INFO, "[seatmgr] seat '{}' loses focused layer surface, clearing focus", s->name());
             g_pSeatManager->setKeyboardFocus(s, nullptr);
         }
     }

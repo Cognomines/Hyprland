@@ -233,7 +233,7 @@ void CHyprBorderDecoration::updateState() {
         ++foreignIdx;
     }
 
-    Log::logger->log(Log::DEBUG, "[seatmgr] border {}: defaultOnWindow={} foreignContributed={} contributors={}", sc<const void*>(PWINDOW.get()), DEFAULTONWINDOW,
+    LOG(Log::DEBUG, "[seatmgr] border {}: defaultOnWindow={} foreignContributed={} contributors={}", sc<const void*>(PWINDOW.get()), DEFAULTONWINDOW,
                      foreignContributed, CONTRIBUTORS.size());
 
     if (CONTRIBUTORS.size() >= 2) {

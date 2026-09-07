@@ -1155,7 +1155,7 @@ void CWindow::mapWindow() {
 
     if (SEAT && !SEAT->isDefault()) {
         if (auto SEATMONITOR = Input::seatTargetMonitor(SEAT)) {
-            Log::logger->log(Log::INFO, "[seatmgr] window {:x} spawned by seat '{}', placing on monitor {}", (uintptr_t)this, SEAT->name(), SEATMONITOR->m_name);
+            LOG(Log::INFO, "[seatmgr] window {:x} spawned by seat '{}', placing on monitor {}", (uintptr_t)this, SEAT->name(), SEATMONITOR->m_name);
             PMONITOR = SEATMONITOR;
         }
     }
@@ -1625,7 +1625,7 @@ void CWindow::unmapWindow() {
             AFFECTED_SEATS.push_back(s);
     }
 
-    Log::logger->log(Log::INFO, "[seatmgr] unmapWindow: {} affected seat(s) for window {:x}, WAS_FOCUSED={}, globalFocus={}", AFFECTED_SEATS.size(), (uintptr_t)this, WAS_FOCUSED, sc<const void*>(Desktop::focusState()->window().get()));
+    LOG(Log::INFO, "[seatmgr] unmapWindow: {} affected seat(s) for window {:x}, WAS_FOCUSED={}, globalFocus={}", AFFECTED_SEATS.size(), (uintptr_t)this, WAS_FOCUSED, sc<const void*>(Desktop::focusState()->window().get()));
 
     const auto PMONITOR = m_monitor.lock();
 
@@ -1736,7 +1736,7 @@ void CWindow::unmapWindow() {
 
             Event::bus()->m_events.window.active.emit(m_self.lock(), FOCUS_REASON_OTHER);
         }
-} else {
+    } else {
         LOG(Log::DEBUG, "Unmapped was not focused, ignoring a refocus.");
     }
 
@@ -1745,13 +1745,13 @@ void CWindow::unmapWindow() {
     // Each seat resolves its own monitor from its cursor position.
     static auto PFOCUSCLOSE = CConfigValue<Config::INTEGER>("input:focus_on_close");
     for (auto const& s : AFFECTED_SEATS) {
-        Log::logger->log(Log::INFO, "[seatmgr] seat '{}' lost focused window {}, refocusing (focus_on_close={})", s->name(), m_self.lock(), *PFOCUSCLOSE);
+        LOG(Log::INFO, "[seatmgr] seat '{}' lost focused window {}, refocusing (focus_on_close={})", s->name(), m_self.lock(), *PFOCUSCLOSE);
 
         const auto SEAT_CURSOR_POS = Pointer::mgr()->position(s);
         const auto SEAT_MONITOR    = State::monitorState()->query().vec(SEAT_CURSOR_POS).run();
 
         if (!SEAT_MONITOR) {
-            Log::logger->log(Log::INFO, "[seatmgr] seat '{}' no monitor from cursor, skipping", s->name());
+            LOG(Log::INFO, "[seatmgr] seat '{}' no monitor from cursor, skipping", s->name());
             g_pSeatManager->setKeyboardFocus(s, nullptr);
             continue;
         }
@@ -1767,7 +1767,7 @@ void CWindow::unmapWindow() {
                 seatCandidate = CAND->window();
         }
 
-        Log::logger->log(Log::INFO, "[seatmgr] seat '{}' candidate: {}", s->name(), sc<const void*>(seatCandidate.get()));
+        LOG(Log::INFO, "[seatmgr] seat '{}' candidate: {}", s->name(), sc<const void*>(seatCandidate.get()));
 
         if (seatCandidate && SEAT_MONITOR->m_activeSpecialWorkspace && seatCandidate->m_workspace != SEAT_MONITOR->m_activeSpecialWorkspace)
             seatCandidate = nullptr;
@@ -1776,7 +1776,7 @@ void CWindow::unmapWindow() {
         if (seatCandidate && seatCandidate->m_monitor.lock() != SEAT_MONITOR)
             seatCandidate = nullptr;
 
-        Log::logger->log(Log::INFO, "[seatmgr] seat '{}' final candidate: {} (monitor={})", s->name(), sc<const void*>(seatCandidate.get()), SEAT_MONITOR->m_name);
+        LOG(Log::INFO, "[seatmgr] seat '{}' final candidate: {} (monitor={})", s->name(), sc<const void*>(seatCandidate.get()), SEAT_MONITOR->m_name);
 
         if (seatCandidate) {
             g_pSeatManager->setKeyboardFocus(s, seatCandidate->wlSurface()->resource());
@@ -1786,7 +1786,6 @@ void CWindow::unmapWindow() {
             s->m_focusWindow = nullptr;
         }
     }
-}
 
     if (!m_backend->traits().suggestsNoBorder)                              // don't animate out if they weren't animated in.
         *m_realPosition = m_realPosition->value() + Vector2D(0.01f, 0.01f); // it has to be animated, otherwise CesktopAnimationManager will ignore it

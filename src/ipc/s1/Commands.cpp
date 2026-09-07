@@ -950,7 +950,8 @@ static std::string devicesRequest(eHyprCtlOutputFormat format, std::string reque
 
         // P4-lite: per-seat cursor positions (default seat's lives in the pointer manager)
         result += "\n\nSeat cursors:\n";
-        result += std::format("\t{}: ({:.1f}, {:.1f})\n", g_pInputManager->seat()->name(), Pointer::mgr()->position().x, Pointer::mgr()->position().y);
+        result += std::format("\t{}: ({:.1f}, {:.1f})\n", g_pInputManager->seat()->name(), Pointer::mgr()->position(g_pInputManager->seat()).x,
+                              Pointer::mgr()->position(g_pInputManager->seat()).y);
         for (auto const& s : g_pSeatManager->seats()) {
             if (s->isDefault())
                 continue;

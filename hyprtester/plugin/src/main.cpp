@@ -346,9 +346,9 @@ static SDispatchResult testPinchDeltaScale(float scale) {
     if (g_pTrackpadGestures->m_activeGesture)
         return {.success = false, .error = "A trackpad gesture is already active"};
 
-    const auto  OLD_MODS = g_pInputManager->m_lastMods;
-    CScopeGuard RESTORE_MODS([OLD_MODS] { g_pInputManager->m_lastMods = OLD_MODS; });
-    g_pInputManager->m_lastMods = Input::HL_MODIFIER_NONE;
+    const auto  OLD_MODS = g_pInputManager->seat()->m_lastMods;
+    CScopeGuard RESTORE_MODS([OLD_MODS] { g_pInputManager->seat()->m_lastMods = OLD_MODS; });
+    g_pInputManager->seat()->m_lastMods = Input::HL_MODIFIER_NONE;
 
     const auto EVENTS = makeShared<SPinchScaleEvents>();
     const auto ADDED  = g_pTrackpadGestures->addGesture(makeUnique<CPinchScaleRecorder>(EVENTS), FINGERS, DIRECTION, Input::HL_MODIFIER_NONE, scale, DISABLE_INHIBIT);
