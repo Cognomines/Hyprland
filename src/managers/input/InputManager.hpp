@@ -215,9 +215,12 @@ class CInputManager {
 
     // for shared mods
     const std::vector<uint32_t>& getKeysFromAllKBs();
-    Input::ModifierMask          getModsFromAllKBs();
-    Input::ModifierMask          xkbModsToHyprland(SP<IKeyboard> relative, uint32_t mask);
-    uint32_t                     hyprlandModsToXkb(SP<IKeyboard> relative, Input::ModifierMask mask);
+    // mods state of the device's owner seat; null = ambient seat
+    Input::ModifierMask getModsFromAllKBs(IHID* ctx = nullptr);
+    bool                shareKeyFromAllKBs(SP<IKeyboard> relative, uint32_t key, bool pressed);
+    Input::ModifierMask shareModsFromAllKBs(SP<IKeyboard> relative, Input::ModifierMask mask);
+    Input::ModifierMask xkbModsToHyprland(SP<IKeyboard> relative, uint32_t mask);
+    uint32_t            hyprlandModsToXkb(SP<IKeyboard> relative, Input::ModifierMask mask);
 
     // for virtual keyboards: whether we should respect them as normal ones
     bool        shouldIgnoreVirtualKeyboard(SP<IKeyboard>);
@@ -318,8 +321,6 @@ class CInputManager {
 
     void restoreCursorIconToApp(); // no-op if restored
 
-    bool                  shareKeyFromAllKBs(uint32_t key, bool pressed);
-    Input::ModifierMask   shareModsFromAllKBs(Input::ModifierMask mask);
     std::vector<uint32_t> m_pressed;
     Input::ModifierMask   m_lastMods = Input::HL_MODIFIER_NONE;
 
