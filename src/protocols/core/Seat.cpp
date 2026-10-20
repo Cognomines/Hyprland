@@ -4,6 +4,7 @@
 #include "../../devices/IKeyboard.hpp"
 #include "../../devices/IHID.hpp"
 #include "../../managers/SeatManager.hpp"
+#include "../../managers/input/SeatContext.hpp"
 #include "../../helpers/time/Time.hpp"
 #include "../../config/ConfigValue.hpp"
 #include <algorithm>
@@ -560,6 +561,17 @@ void CWLSeatProtocol::bindManager(wl_client* client, void* data, uint32_t ver, u
     }
 
     RESOURCE->m_self = RESOURCE;
+
+// P3-lite: tag the resource with the client's logical seat so per-seat
+    // focus and event delivery can filter by owner
+    RESOURCE->m_owner = Input::seatForClient(client);
+
+    pid_t  pid = 0;
+    wl_client_get_credentials(client, &pid, nullptr, nullptr);
+    if (RESOURCE->m_owner)
+        LOG(Log::INFO, "[seatmgr] client pid {} bound wl_seat -> seat '{}'", pid, RESOURCE->m_owner->name());
+    else
+        LOG(Log::INFO, "[seatmgr] client pid {} bound wl_seat -> UNTAGGED", pid);
 
     LOG(Log::DEBUG, "New seat resource bound at {:x}", (uintptr_t)RESOURCE.get());
 
