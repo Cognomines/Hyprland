@@ -1,9 +1,5 @@
 #pragma once
 
-namespace Render {
-    class CRenderContext;
-}
-
 /*
     Implementations for:
      - wl_data_offer
@@ -30,6 +26,7 @@ class CWLDataSourceResource;
 class CWLDataOfferResource;
 
 class CWLSurfaceResource;
+class CSeat;
 
 class CWLDataOfferResource : public IDataOffer {
   public:
@@ -143,10 +140,16 @@ class CWLDataDeviceProtocol : public IWaylandProtocol {
     virtual void bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id);
 
     // renders and damages the dnd icon, if present
-    void renderDND(Render::CRenderContext& ctx, PHLMONITOR pMonitor, const Time::steady_tp& when);
+    void renderDND(PHLMONITOR pMonitor, const Time::steady_tp& when);
     // for inputmgr to force refocus
     // TODO: move handling to seatmgr
     bool dndActive();
+
+    // lets the input manager record which seat pressed a pointer/touch button,
+    // so a subsequent start_drag request is attributed to the triggering seat
+    void notePressSeat(SP<CSeat> seat);
+    // logical seat that currently owns the active drag, or null
+    SP<CSeat> dndSeat() const;
 
     // called on an escape key pressed, for moments where it gets stuck
     void abortDndIfPresent();
@@ -173,15 +176,22 @@ class CWLDataDeviceProtocol : public IWaylandProtocol {
     void onDndPointerFocus();
 
     struct {
-        WP<IDataDevice>         focusedDevice;
-        WP<IDataSource>         currentSource;
-        WP<CWLSurfaceResource>  dndSurface;
-        WP<CWLSurfaceResource>  originSurface;
+        WP<IDataDevice>        focusedDevice;
+        WP<IDataSource>        currentSource;
+        WP<CWLSurfaceResource> dndSurface;
+        WP<CWLSurfaceResource> originSurface;
+        // logical seat whose implicit grab started the drag; empty when the
+        // default seat did, in which case the legacy global cursor is used
+        WP<CSeat>               seat;
         std::optional<Vector2D> touchPos;
         bool                    overriddenCursor = false;
         CHyprSignalListener     dndSurfaceDestroy;
         CHyprSignalListener     dndSurfaceCommit;
-
+        // seat whose pointer/touch was last pressed; consumed by initiateDrag
+        // so a press that becomes a drag is owned by the triggering seat even
+        // when the drag origin surface belongs to a different (default-seat)
+        // client such as nemo-desktop
+        WP<CSeat> pendingDragSeat;
         // for ending a dnd
         CHyprSignalListener mouseMove;
         CHyprSignalListener mouseButton;
@@ -197,6 +207,10 @@ class CWLDataDeviceProtocol : public IWaylandProtocol {
     void completeDrag();
     void cleanupDndState(bool resetDevice, bool resetSource, bool simulateInput);
     bool wasDragSuccessful();
+
+    // the surface currently hovered by the seat that owns the active drag;
+    // falls back to the default seat's global dnd focus
+    WP<CWLSurfaceResource> dndFocusSurface() const;
 
     //
     SP<IDataDevice> dataDeviceForClient(wl_client*);
