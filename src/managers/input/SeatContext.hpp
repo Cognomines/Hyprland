@@ -1,0 +1,47 @@
+#pragma once
+
+#include "../../defines.hpp"
+
+class CSeat;
+struct wl_client;
+namespace Monitor {
+    class CMonitor;
+}
+
+/*
+    Short-lived context for "current seat" semantics: bind execution, IPC
+    dispatch (--seat) and submap lookups set the ambient seat for their scope;
+    everything else resolves to the default seat.
+*/
+
+namespace Input {
+    // the ambient seat, never null: top of the context stack, else the default seat
+    SP<CSeat> ambientSeat();
+
+    // the logical seat a wayland client belongs to, resolved through the pid
+    // seat registry at wl_seat bind time; falls back to the default seat
+    SP<CSeat> seatForClient(wl_client* client);
+
+    // seatForClient resolved straight from a raw pid
+    SP<CSeat> seatForPid(pid_t pid);
+
+    // placement seat for a newly mapped surface: the spawning seat, unless
+    // it is the default seat and a foreign seat last clicked/typed into the
+    // client (menus opened by a click, launchers spawned from them)
+    SP<CSeat> seatForSurfacePlacement(SP<CSeat> spawnSeat, wl_client* client);
+
+    // the monitor a foreign seat spawns onto: where it is working (focused
+    // window's monitor, else the monitor it last focused), falling back to
+    // its cursor position. Returns null for the default seat.
+    SP<Monitor::CMonitor> seatTargetMonitor(SP<CSeat> seat);
+
+    // pushes onto the ambient-seat stack until destroyed; nesting supported
+    struct SScopedAmbientSeat {
+        explicit SScopedAmbientSeat(SP<CSeat> seat);
+        ~SScopedAmbientSeat();
+
+        SScopedAmbientSeat(const SScopedAmbientSeat&)            = delete;
+        SScopedAmbientSeat(SScopedAmbientSeat&&)                 = delete;
+        SScopedAmbientSeat& operator=(const SScopedAmbientSeat&) = delete;
+    };
+}

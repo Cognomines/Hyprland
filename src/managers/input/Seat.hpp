@@ -6,6 +6,9 @@
 #include <vector>
 
 #include "../../defines.hpp"
+#include "../../desktop/DesktopTypes.hpp"
+#include "../../helpers/math/Math.hpp"
+#include "../../helpers/signal/Signal.hpp"
 #include "../../input/Keys.hpp"
 
 class IKeyboard;
@@ -15,6 +18,8 @@ class IHID;
 class CTabletTool;
 class CTabletPad;
 class CTablet;
+class CWLSurfaceResource;
+class CWLSeatResource;
 
 inline const std::string DEFAULT_SEAT_NAME = "Hyprland";
 
@@ -32,6 +37,8 @@ class CSeat {
 
     const std::string& name() const;
     bool               isDefault() const;
+    // true if at least one tracked HID is still alive
+    bool hasLiveDevices() const;
 
     // devices connected to this seat
     std::vector<SP<IKeyboard>>   m_keyboards;
@@ -41,9 +48,9 @@ class CSeat {
     std::vector<SP<CTabletTool>> m_tabletTools;
     std::vector<SP<CTabletPad>>  m_tabletPads;
     // general container for all HID devices connected to this seat
-    std::vector<WP<IHID>>        m_hids;
+    std::vector<WP<IHID>> m_hids;
 
-    uint32_t m_capabilities = 0;
+    uint32_t              m_capabilities = 0;
 
     struct SHeldPointerButton {
         uint32_t     button = 0;
@@ -67,7 +74,37 @@ class CSeat {
     // shared key/mod state across this seat's keyboards,
     // do not write directly
     std::vector<uint32_t> m_pressed;
-    Input::ModifierMask   m_lastMods = Input::HL_MODIFIER_NONE;
+    // client that received this seat's latest key press: releases must go
+    // back there even after focus moved on, or the client repeats forever
+    wl_client*          m_pressedClient = nullptr;
+    Input::ModifierMask m_lastMods      = Input::HL_MODIFIER_NONE;
+
+    // P4-lite: independent cursor position for non-default seats. The default
+    // seat's position lives in CPointerManager::m_pointerPos.
+    Vector2D m_cursorPos    = {0, 0};
+    bool     m_cursorActive = false;
+
+    // P3-lite: independent input focus for this seat, mirrored from
+    // CSeatManager::m_state which remains the default seat's focus
+    WP<CWLSurfaceResource> m_keyboardFocus;
+    WP<CWLSeatResource>    m_keyboardFocusResource;
+    WP<CWLSurfaceResource> m_pointerFocus;
+    WP<CWLSeatResource>    m_pointerFocusResource;
+    Vector2D               m_lastPointerLocal = {0, 0};
+    // drop-target surface for a drag this seat owns; mirrors the default
+    // seat's global m_state.dndPointerFocus but lives per seat so a foreign
+    // seat's drag doesn't resolve against the default seat's cursor
+    WP<CWLSurfaceResource> m_dndPointerFocus;
+    // window focused by this seat's keyboard, drives per-seat border colors
+    PHLWINDOWREF m_focusWindow;
+    // monitor the seat's keyboard focus currently lives on, mirrors the
+    // per-seat monitor focus the CFocusState singleton cannot represent
+    PHLMONITORREF m_focusMonitor;
+    // window this seat's cursor currently hovers, drives per-seat borders
+    PHLWINDOWREF        m_hoverWindow;
+
+    CHyprSignalListener m_kbFocusDestroyListener;
+    CHyprSignalListener m_ptrFocusDestroyListener;
 
   private:
     std::string m_name;
