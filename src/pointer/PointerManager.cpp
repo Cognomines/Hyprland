@@ -484,8 +484,6 @@ void CPointerManager::onCursorMoved() {
         updateCursorBackend();
 }
 
-<<<<<<< HEAD
-=======
 SP<CSeat> CPointerManager::seatForDevice(SP<IHID> dev) {
     if (dev) {
         if (const auto SEAT = dev->m_seat.lock(); SEAT)
@@ -1109,8 +1107,6 @@ void CPointerManager::warpAbsolute(Vector2D abs, SP<IHID> dev, WP<Aquamarine::IO
 
     damageIfSoftware();
 
-<<<<<<< HEAD
-=======
     const auto SEAT = seatForDevice(dev);
     auto&      POS  = posRefFor(SEAT);
 
@@ -1118,28 +1114,32 @@ void CPointerManager::warpAbsolute(Vector2D abs, SP<IHID> dev, WP<Aquamarine::IO
 
     const auto OLD_POS = POS;
 
->>>>>>> e4003b675 (input,pointer: per-seat input routing + dual-cursor rendering)
     if (std::isnan(abs.x) || std::isnan(abs.y)) {
-        m_pointerPos.x = std::isnan(abs.x) ? m_pointerPos.x : mappedArea.x + mappedArea.w * abs.x;
-        m_pointerPos.y = std::isnan(abs.y) ? m_pointerPos.y : mappedArea.y + mappedArea.h * abs.y;
+        POS.x = std::isnan(abs.x) ? POS.x : mappedArea.x + mappedArea.w * abs.x;
+        POS.y = std::isnan(abs.y) ? POS.y : mappedArea.y + mappedArea.h * abs.y;
     } else {
         const auto MAPPED = Math::mapNormalizedToBox(abs, mappedArea, coordinateTransform);
-        m_pointerPos      = mappedToSourceOutput ? mappedArea.closestPoint(MAPPED) : MAPPED;
+        POS               = mappedToSourceOutput ? mappedArea.closestPoint(MAPPED) : MAPPED;
     }
 
-<<<<<<< HEAD
-    onCursorMoved();
-    recheckEnteredOutputs();
-=======
+    POS = closestValid(POS);
     SEAT->m_cursorActive = true;
 
     if (SEAT->isDefault()) {
-        onCursorMoved();
-        recheckEnteredOutputs();
-    } else
-        damageForeignCursor(SEAT, OLD_POS);
->>>>>>> e4003b675 (input,pointer: per-seat input routing + dual-cursor rendering)
+        if (!g_pInputManager->isLocked()) {
+            recheckEnteredOutputs();
+            onCursorMoved();
+        }
+        damageIfSoftware();
+        return;
+    }
 
+    damageForeignCursor(SEAT, OLD_POS);
+    if (!g_pInputManager->isLocked()) {
+        g_pInputManager->mouseMoveUnified(Time::millis(Time::steadyNow()), false, true, POS);
+        recheckEnteredOutputs();
+    }
+    damageForeignCursor(SEAT, POS);
     damageIfSoftware();
 }
 
