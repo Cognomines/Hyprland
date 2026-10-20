@@ -263,10 +263,6 @@ class CInputManager {
     bool                 m_cursorImageOverridden = false;
     eBorderIconDirection m_borderIconDirection   = BORDERICON_NONE;
 
-    // the ambient seat: until seats are configurable (see logicalseats.md),
-    // this is always the default seat and holds all devices.
-    SP<CSeat> seat();
-
     // for click behavior override
     eClickBehaviorMode m_clickBehavior        = CLICKMODE_DEFAULT;
     Vector2D           m_lastCursorPosFloored = Vector2D();

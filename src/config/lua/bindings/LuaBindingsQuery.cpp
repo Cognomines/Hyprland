@@ -252,12 +252,14 @@ static int hlGetDevices(lua_State* L) {
         }
     };
 
-    append(g_pInputManager->m_pointers);
-    append(g_pInputManager->m_keyboards);
-    append(g_pInputManager->m_tabletPads);
-    append(g_pInputManager->m_tablets);
-    append(g_pInputManager->m_tabletTools);
-    append(g_pInputManager->m_touches);
+    if (g_pInputManager->seat()) {
+        append(g_pInputManager->seat()->m_pointers);
+        append(g_pInputManager->seat()->m_keyboards);
+        append(g_pInputManager->seat()->m_tabletPads);
+        append(g_pInputManager->seat()->m_tablets);
+        append(g_pInputManager->seat()->m_tabletTools);
+        append(g_pInputManager->seat()->m_touches);
+    }
     for (const auto& device : g_pInputManager->m_switches) {
         if (!device.pDevice)
             continue;
