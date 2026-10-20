@@ -2504,3 +2504,32 @@ void CInputManager::onPinchEnd(IPointer::SPinchEndEvent e) {
 
     PROTO::pointerGestures->pinchEnd(e.timeMs, e.cancelled);
 }
+
+void CInputManager::refocusForeignSeats() {
+    // Global (default-seat) keyboard focus moved: re-enter keyboard focus
+    // for every other live seat whose cursor is over a surface, so its
+    // wl_keyboard enter survives.  When the cursor is on the desktop (no
+    // surface), skip the seat entirely — running the full unified pass
+    // would hit the empty-hit path and *clear* keyboard focus, which is
+    // wrong for a seat that spawned a client and is stationary.
+    for (auto const& s : g_pSeatManager->seats()) {
+        if (!s || s->isDefault())
+            continue;
+        if (!s->hasLiveDevices() || s->m_pointers.empty())
+            continue;
+
+        // quick hit-test: is the cursor actually over a surface?
+        const auto CURSOR   = Pointer::mgr()->position(s);
+        const auto PMONITOR = State::monitorState()->query().vec(CURSOR).run();
+        if (!PMONITOR)
+            continue;
+
+        const auto WIN = Desktop::viewState()->hitTest().windowAt(CURSOR, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+        if (!WIN)
+            continue;
+
+        const Input::SScopedAmbientSeat SCOPE{s};
+        m_lastCursorPosFloored = m_lastCursorPosFloored - Vector2D(1, 1); // force the report, see simulateMouseMovement
+        mouseMoveUnified(Time::millis(Time::steadyNow()), false, true, std::nullopt, false);
+    }
+}
