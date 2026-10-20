@@ -11,10 +11,14 @@
 #include "../desktop/state/FocusState.hpp"
 #include "../devices/IKeyboard.hpp"
 #include "../desktop/view/LayerSurface.hpp"
+#include "../desktop/view/WLSurface.hpp"
+#include "../desktop/view/window/Window.hpp"
 #include "../managers/input/InputManager.hpp"
 #include "../state/MonitorState.hpp"
 #include "devices/IHID.hpp"
 #include "input/SeatMatching.hpp"
+#include "input/SeatContext.hpp"
+#include "../helpers/time/Time.hpp"
 #include "wlr-layer-shell-unstable-v1.hpp"
 #include <algorithm>
 #include <hyprutils/utils/ScopeGuard.hpp>
@@ -111,6 +115,32 @@ SP<CSeat> CSeatManager::seatByName(const std::string& name) {
     return nullptr;
 }
 
+void CSeatManager::noteClientInteraction(wl_client* client, SP<CSeat> seat) {
+    if (!client || !seat)
+        return;
+
+    std::erase_if(m_clientInteractions, [client](const auto& other) { return other.client == client; });
+    m_clientInteractions.push_back({client, seat->name()});
+
+    if (m_clientInteractions.size() > MAX_CLIENT_INTERACTIONS)
+        m_clientInteractions.erase(m_clientInteractions.begin());
+}
+
+SP<CSeat> CSeatManager::lastInteractingSeat(wl_client* client) {
+    if (!client)
+        return nullptr;
+
+    for (auto const& i : m_clientInteractions | std::views::reverse) {
+        if (i.client != client)
+            continue;
+
+        const auto SEAT = seatByName(i.seatName);
+        return SEAT && !SEAT->isDefault() ? SEAT : nullptr;
+    }
+
+    return nullptr;
+}
+
 SP<CSeat> CSeatManager::ensureSeat(const std::string& name) {
     if (isDefaultLibinputSeatName(name) || name == DEFAULT_SEAT_NAME)
         return defaultSeat();
@@ -118,7 +148,7 @@ SP<CSeat> CSeatManager::ensureSeat(const std::string& name) {
     if (const auto SEAT = seatByName(name); SEAT)
         return SEAT;
 
-    Log::logger->log(Log::DEBUG, "seatManager: creating implicit seat {}", name);
+    LOG(Log::DEBUG, "seatManager: creating implicit seat {}", name);
     return m_seats.emplace_back(makeShared<CSeat>(name, false));
 }
 
@@ -267,7 +297,228 @@ void CSeatManager::updateActiveKeyboardData() {
     PROTO::inputCapture->updateKeymap();
 }
 
+// P3-lite: resources bound by clients of seats other than OWNER are skipped,
+// so default-seat focus changes never stomp other seats' enters
+static bool resourceOwnedBy(const WP<CWLSeatResource>& res, SP<CSeat> owner) {
+    const auto SEAT = res ? res->m_owner.lock() : nullptr;
+    if (!SEAT)
+        return !owner || owner->isDefault(); // untagged (shouldn't happen) counts as default
+    return SEAT == owner;
+}
+
+// P3-lite delivery fallback: true when another seat currently drives this
+// resource through a fallback enter — its owner must not sendLeave() and
+// break that seat's focus
+static bool resourceHeldByOtherSeat(CSeatManager* mgr, const WP<CWLSeatResource>& res, const SP<CSeat>& self) {
+    if (!res)
+        return false;
+
+    for (auto const& s : mgr->seats()) {
+        if (!s || s == self)
+            continue;
+
+        const bool KB = s->m_keyboardFocusResource.lock() == res && s->m_keyboardFocus;
+        const bool PT = s->m_pointerFocusResource.lock() == res && s->m_pointerFocus;
+        if (KB || PT)
+            return true;
+    }
+
+    return false;
+}
+
+// A keydown delivered to a client must always be answered by a keyup on the
+// same client even after focus moved elsewhere, or the client repeats the key
+// forever. Synthesize releases for keys this seat still holds before its
+// keyboards leave a resource, and forget them (the eventual physical release
+// is dropped by the press/release dedup instead of double-delivered).
+static void sendSyntheticKeyReleases(const SP<CSeat>& seat, const WP<CWLKeyboardResource>& k) {
+    const auto KB = k.lock();
+    if (!KB || seat->m_pressed.empty())
+        return;
+
+    const auto TIME = sc<uint32_t>(Time::millis(Time::steadyNow()));
+    for (auto const& code : seat->m_pressed) {
+        LOG(Log::DEBUG, "[seatmgr] synth key release {} on kb leave", code);
+        KB->sendKey(TIME, code, WL_KEYBOARD_KEY_STATE_RELEASED);
+    }
+    seat->m_pressed.clear();
+    seat->m_pressedClient = nullptr;
+}
+
+static PHLWINDOW windowFromFocusSurface(SP<CWLSurfaceResource> surf);
+
+void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf) {
+    if (!seat || seat->isDefault()) {
+        setKeyboardFocusDefault(surf);
+        return;
+    }
+
+    if (surf && seat->m_keyboards.empty()) {
+        LOG(Log::ERR, "setKeyboardFocus for seat {} without a keyboard", seat->name());
+        return;
+    }
+
+    if (seat->m_keyboardFocus == surf)
+        return;
+
+    seat->m_kbFocusDestroyListener.reset();
+
+    // P3-lite delivery fallback: leave resources owned by this seat, plus
+    // any resource we may have entered through another seat when the client
+    // had no seat-owned resources; sendLeave() no-ops elsewhere
+    wl_client* OLDC = seat->m_keyboardFocus ? seat->m_keyboardFocus->client() : nullptr;
+    for (auto const& r : m_seatResources) {
+        const bool OWNED = r->resource->m_owner.lock() == seat;
+        if (!OWNED && (!OLDC || r->resource->client() != OLDC))
+            continue;
+        // same as the default loop: a shared carrier is not ours to leave,
+        // but our pressed keys through it must still be released
+        const bool HELD = !OWNED && r->resource->m_owner.lock() && r->resource->m_owner.lock()->isDefault() && resourceHeldByOtherSeat(this, r->resource, seat);
+
+        for (auto const& k : r->resource->m_keyboards) {
+            if (!k)
+                continue;
+
+            sendSyntheticKeyReleases(seat, k);
+            if (HELD)
+                continue;
+            k->sendMods(0, 0, 0, 0);
+            k->sendLeave();
+        }
+    }
+
+    seat->m_keyboardFocusResource.reset();
+    seat->m_keyboardFocus = surf;
+
+    // keep the seat's own focus window in sync: binds route through the
+    // ambient seat, so a bind-driven focus on a foreign seat would otherwise
+    // never update m_focusWindow (only the mouse path does) and activeWindow()
+    // would keep returning the stale value. Mirror the window's monitor into
+    // m_focusMonitor so per-seat monitor focus survives disabled cursor warps.
+    const auto FOCUSWINDOW = windowFromFocusSurface(surf);
+    seat->m_focusWindow    = FOCUSWINDOW;
+    if (FOCUSWINDOW)
+        seat->m_focusMonitor = FOCUSWINDOW->m_monitor;
+    else
+        seat->m_focusMonitor.reset();
+
+    if (!surf) {
+        m_events.keyboardFocusChange.emit();
+        return;
+    }
+
+    wl_array keys;
+    wl_array_init(&keys);
+    CScopeGuard x([&keys] { wl_array_release(&keys); });
+
+    const auto& PRESSED = seat->m_pressed;
+    static_assert(std::is_same_v<std::decay_t<decltype(PRESSED)>::value_type, uint32_t>, "Element type different from keycode type uint32_t");
+
+    const auto PRESSEDARRSIZE = PRESSED.size() * sizeof(uint32_t);
+    if (PRESSEDARRSIZE > 0) {
+        const auto PKEYS = wl_array_add(&keys, PRESSEDARRSIZE);
+        if (PKEYS)
+            std::ranges::copy(PRESSED, sc<uint32_t*>(PKEYS));
+    }
+
+    auto client = surf->client();
+
+    // enter through this seat's own resources when the client has them,
+    // falling back to whatever it does have (e.g. a bar spawned on the
+    // default seat is still clickable/typable from other seats)
+    bool hasOwned = false;
+    for (auto const& r : m_seatResources | std::views::reverse) {
+        if (r->resource->client() == client && r->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    if (!hasOwned)
+        LOG(Log::INFO, "[seatmgr] kb enter via delivery fallback for seat {}", seat->name());
+
+    for (auto const& r : m_seatResources | std::views::reverse) {
+        if (r->resource->client() != client)
+            continue;
+        if (hasOwned && r->resource->m_owner.lock() != seat)
+            continue;
+
+        seat->m_keyboardFocusResource = r->resource;
+        for (auto const& k : r->resource->m_keyboards) {
+            if (!k)
+                continue;
+
+            k->sendEnter(surf, &keys);
+            uint32_t depressed = 0;
+            uint32_t latched   = 0;
+            uint32_t locked    = 0;
+            for (auto const& kb : seat->m_keyboards) {
+                if (!kb->m_enabled || !kb->shareStates() || (kb->isVirtual() && g_pInputManager->shouldIgnoreVirtualKeyboard(kb)))
+                    continue;
+                depressed |= kb->m_modifiersState.depressed;
+                latched |= kb->m_modifiersState.latched;
+                locked |= kb->m_modifiersState.locked;
+            }
+            k->sendMods(depressed, latched, locked, 0);
+        }
+    }
+
+    LOG(Log::INFO, "[seatmgr] kb focus for seat '{}' -> client {}{}", seat->name(), sc<const void*>(client), hasOwned ? "" : " (fallback)");
+
+    seat->m_kbFocusDestroyListener = surf->m_events.destroy.listen([this, seat] { setKeyboardFocus(seat, nullptr); });
+
+    m_events.keyboardFocusChange.emit();
+}
+
 void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
+    setKeyboardFocus(Input::ambientSeat(), surf);
+}
+
+static PHLWINDOW windowFromFocusSurface(SP<CWLSurfaceResource> surf) {
+    if (!surf)
+        return nullptr;
+
+    const auto HLSURF = Desktop::View::CWLSurface::fromResource(surf);
+    if (!HLSURF)
+        return nullptr;
+
+    return Desktop::View::CWindow::fromView(HLSURF->view());
+}
+
+bool CSeatManager::isWindowKeyboardFocusedAnywhere(PHLWINDOW window) {
+    if (!window)
+        return false;
+
+    if (windowFromFocusSurface(m_state.keyboardFocus.lock()) == window)
+        return true;
+
+    for (auto const& s : m_seats) {
+        if (!s || s->isDefault())
+            continue;
+
+        if (windowFromFocusSurface(s->m_keyboardFocus.lock()) == window)
+            return true;
+    }
+
+    return false;
+}
+
+bool CSeatManager::isWindowForeignSeatFocused(PHLWINDOW window) {
+    if (!window)
+        return false;
+
+    for (auto const& s : m_seats) {
+        if (!s || s->isDefault())
+            continue;
+
+        if (windowFromFocusSurface(s->m_keyboardFocus.lock()) == window)
+            return true;
+    }
+
+    return false;
+}
+
+void CSeatManager::setKeyboardFocusDefault(SP<CWLSurfaceResource> surf) {
     if (m_state.keyboardFocus == surf)
         return;
 
@@ -280,8 +531,30 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
 
     // Don't gate leave on m_state.keyboardFocusResource — the WP can
     // be stale. sendLeave no-ops on keyboards without m_currentSurface.
+    // Delivery fallback: also leave resources we may have entered through
+    // another seat when the client had no default-owned resources.
+    wl_client* OLDC = m_state.keyboardFocus ? m_state.keyboardFocus->client() : nullptr;
     for (auto const& k : PROTO::seat->m_keyboards) {
         if (!k)
+            continue;
+
+        const bool OWNED    = resourceOwnedBy(k->m_owner, defaultSeat());
+        const auto OWNERRES = k->m_owner.lock();
+        const bool ONOLDCLI = OLDC && OWNERRES && OWNERRES->client() == OLDC;
+        if (!OWNED && !ONOLDCLI)
+            continue;
+        // a default-owned resource can carry another seat's live enter
+        // (delivery fallback): never retract it on the default seat's behalf,
+        // but our pressed keys through it must still be released or the
+        // client repeats them forever
+        const bool HELD = resourceHeldByOtherSeat(this, OWNERRES, defaultSeat());
+        if (!HELD && !OWNED)
+            LOG(Log::INFO, "[seatmgr] default kb leave via delivery fallback");
+        if (HELD)
+            LOG(Log::DEBUG, "[seatmgr] keeping kb enter on shared carrier, releasing default keys only");
+
+        sendSyntheticKeyReleases(defaultSeat(), k);
+        if (HELD)
             continue;
 
         k->sendMods(0, m_keyboard->m_modifiersState.latched, m_keyboard->m_modifiersState.locked, m_keyboard->m_modifiersState.group);
@@ -292,6 +565,10 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
     m_state.keyboardFocus = surf;
 
     if (!surf) {
+        // foreign seats may need to re-enter their own focus after the
+        // default seat's client pair changed (map steals, leaves, refocuses)
+        if (g_pInputManager)
+            g_pInputManager->refocusForeignSeats();
         m_events.keyboardFocusChange.emit();
         return;
     }
@@ -311,8 +588,26 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
     }
 
     auto client = surf->client();
+
+    // delivery fallback: enter through default-owned resources when the
+    // client has them, else through whatever resources it does have
+    // (e.g. a terminal spawned on seat1 is still usable from the default
+    // seat and vice versa)
+    bool hasOwned = false;
+    for (auto const& r : m_seatResources | std::views::reverse) {
+        if (r->resource->client() == client && resourceOwnedBy(r->resource, defaultSeat())) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    if (!hasOwned)
+        LOG(Log::INFO, "[seatmgr] default kb enter via delivery fallback");
+
     for (auto const& r : m_seatResources | std::views::reverse) {
         if (r->resource->client() != client)
+            continue;
+        if (hasOwned && !resourceOwnedBy(r->resource, defaultSeat()))
             continue;
 
         m_state.keyboardFocusResource = r->resource;
@@ -324,7 +619,7 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
             uint32_t depressed = m_keyboard->m_modifiersState.depressed;
             uint32_t latched   = m_keyboard->m_modifiersState.latched;
             uint32_t locked    = m_keyboard->m_modifiersState.locked;
-            for (auto const& kb : g_pInputManager->seat()->m_keyboards) {
+            for (auto const& kb : defaultSeat()->m_keyboards) {
                 if (!kb->m_enabled || !kb->shareStates() || (kb->isVirtual() && g_pInputManager->shouldIgnoreVirtualKeyboard(kb)))
                     continue;
                 depressed |= kb->m_modifiersState.depressed;
@@ -335,17 +630,67 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
         }
     }
 
+    LOG(Log::INFO, "[seatmgr] default kb focus -> client {}{}", sc<const void*>(client), hasOwned ? "" : " (fallback)");
+
     m_listeners.keyboardSurfaceDestroy = surf->m_events.destroy.listen([this] { setKeyboardFocus(nullptr); });
+
+    // self-healing: foreign seats re-enter their own focus under their own
+    // cursors whenever the default seat's focus pair changes
+    if (g_pInputManager)
+        g_pInputManager->refocusForeignSeats();
 
     m_events.keyboardFocusChange.emit();
 }
 
-void CSeatManager::sendKeyboardKey(uint32_t timeMs, uint32_t key, wl_keyboard_key_state state_) {
-    if (!m_state.keyboardFocusResource)
+void CSeatManager::sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key, wl_keyboard_key_state state_) {
+    const auto FOCUS  = (!seat || seat->isDefault()) ? m_state.keyboardFocusResource.lock() : seat->m_keyboardFocusResource.lock();
+    wl_client* TARGET = FOCUS ? FOCUS->client() : nullptr;
+
+    // a press must always be answered by a release on the SAME client even
+    // after this seat's focus moved elsewhere: route releases to the client
+    // that got the press when the current focus no longer matches it
+    if (state_ == WL_KEYBOARD_KEY_STATE_RELEASED && seat && seat->m_pressedClient && (!TARGET || TARGET != seat->m_pressedClient)) {
+        LOG(Log::DEBUG, "[seatmgr] releasing key on original client after focus moved");
+        deliverKeyboardKey(seat->m_pressedClient, seat, timeMs, key, state_);
+        return;
+    }
+
+    if (!TARGET) {
+        LOG(Log::INFO, "[seatmgr] {} dropped: seat focus resource is null", "key");
+        return;
+    }
+
+    if (state_ == WL_KEYBOARD_KEY_STATE_PRESSED)
+        noteClientInteraction(TARGET, seat);
+
+    deliverKeyboardKey(TARGET, seat, timeMs, key, state_);
+    if (state_ == WL_KEYBOARD_KEY_STATE_PRESSED && seat && !seat->m_pressed.empty())
+        seat->m_pressedClient = TARGET;
+}
+
+void CSeatManager::deliverKeyboardKey(wl_client* client, const SP<CSeat>& seat, uint32_t timeMs, uint32_t key, wl_keyboard_key_state state_) {
+    if (!client)
         return;
 
+    // P3-lite delivery fallback: prefer this seat's own resources; a client
+    // with none of them (e.g. a bar spawned on another seat) is still served
+    // through whatever resources it does have
+    bool hasOwned = false;
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != m_state.keyboardFocusResource->client())
+        if (s->resource->client() == client && s->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    if (!hasOwned)
+        LOG(Log::DEBUG, "[seatmgr] key delivered via delivery fallback");
+
+    bool delivered = false;
+    for (auto const& s : m_seatResources) {
+        if (s->resource->client() != client)
+            continue;
+        if (hasOwned && s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& k : s->resource->m_keyboards) {
@@ -353,16 +698,43 @@ void CSeatManager::sendKeyboardKey(uint32_t timeMs, uint32_t key, wl_keyboard_ke
                 continue;
 
             k->sendKey(timeMs, key, state_);
+            delivered = true;
         }
     }
+
+    if (!delivered)
+        LOG(Log::INFO, "[seatmgr] {} dropped: no keyboard resource for the target client", "key");
 }
 
-void CSeatManager::sendKeyboardMods(uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
-    if (!m_state.keyboardFocusResource)
+void CSeatManager::sendKeyboardKey(uint32_t timeMs, uint32_t key, wl_keyboard_key_state state) {
+    sendKeyboardKey(Input::ambientSeat(), timeMs, key, state);
+}
+
+void CSeatManager::sendKeyboardMods(SP<CSeat> seat, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
+    const auto FOCUS = (!seat || seat->isDefault()) ? m_state.keyboardFocusResource.lock() : seat->m_keyboardFocusResource.lock();
+    if (!FOCUS) {
+        LOG(Log::INFO, "[seatmgr] {} dropped: seat focus resource is null", "mods");
+        return;
+    }
+    if (!FOCUS)
         return;
 
+    // P3-lite delivery fallback: see sendKeyboardKey
+    bool hasOwned = false;
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != m_state.keyboardFocusResource->client())
+        if (s->resource->client() == FOCUS->client() && s->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    if (!hasOwned)
+        LOG(Log::DEBUG, "[seatmgr] mods delivered via delivery fallback");
+
+    for (auto const& s : m_seatResources) {
+        if (s->resource->client() != FOCUS->client())
+            continue;
+        if (hasOwned && s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& k : s->resource->m_keyboards) {
@@ -374,7 +746,107 @@ void CSeatManager::sendKeyboardMods(uint32_t depressed, uint32_t latched, uint32
     }
 }
 
+void CSeatManager::sendKeyboardMods(uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
+    sendKeyboardMods(Input::ambientSeat(), depressed, latched, locked, group);
+}
+
+void CSeatManager::setPointerFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf, const Vector2D& local) {
+    if (!seat || seat->isDefault()) {
+        setPointerFocusDefault(surf, local);
+        return;
+    }
+
+    // During a drag, only the seat that owns it participates in dnd focus;
+    // all other foreign seats are excluded (single global drag, seat-locked).
+    const bool dndActive = PROTO::data && PROTO::data->dndActive();
+    const auto DNDOWNER  = dndActive ? PROTO::data->m_dnd.seat.lock() : nullptr;
+    if (dndActive && (!DNDOWNER || DNDOWNER != seat))
+        return; // foreign seats don't participate in the dnd focus (P3-lite)
+
+    // remember the drag's live drop target on the owning seat
+    seat->m_dndPointerFocus = surf;
+
+    if (seat->m_pointerFocus == surf)
+        return;
+
+    if (surf && seat->m_pointers.empty()) {
+        LOG(Log::ERR, "setPointerFocus for seat {} without a pointer", seat->name());
+        return;
+    }
+
+    seat->m_ptrFocusDestroyListener.reset();
+
+    // P3-lite delivery fallback: see setKeyboardFocus
+    wl_client* OLDC = seat->m_pointerFocus ? seat->m_pointerFocus->client() : nullptr;
+    for (auto const& r : m_seatResources) {
+        const bool OWNED = r->resource->m_owner.lock() == seat;
+        if (!OWNED && (!OLDC || r->resource->client() != OLDC))
+            continue;
+        if (!OWNED && r->resource->m_owner.lock() && r->resource->m_owner.lock()->isDefault() && resourceHeldByOtherSeat(this, r->resource, seat))
+            continue;
+
+        for (auto const& p : r->resource->m_pointers) {
+            if (!p)
+                continue;
+
+            p->sendLeave();
+        }
+    }
+
+    auto lastPointerFocusResource = seat->m_pointerFocusResource.lock();
+
+    seat->m_pointerFocusResource.reset();
+    seat->m_pointerFocus = surf;
+
+    if (!surf) {
+        sendPointerFrame(lastPointerFocusResource);
+        return;
+    }
+
+    auto client = surf->client();
+
+    bool hasOwned = false;
+    for (auto const& r : m_seatResources | std::views::reverse) {
+        if (r->resource->client() == client && r->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    if (!hasOwned)
+        LOG(Log::INFO, "[seatmgr] ptr enter via delivery fallback for seat {}", seat->name());
+
+    for (auto const& r : m_seatResources | std::views::reverse) {
+        if (r->resource->client() != client)
+            continue;
+        if (hasOwned && r->resource->m_owner.lock() != seat)
+            continue;
+
+        seat->m_pointerFocusResource = r->resource;
+        seat->m_lastPointerLocal     = local;
+        for (auto const& p : r->resource->m_pointers) {
+            if (!p)
+                continue;
+
+            p->sendEnter(surf, local);
+        }
+    }
+
+    LOG(Log::INFO, "[seatmgr] ptr focus for seat '{}' -> client {}{}", seat->name(), sc<const void*>(client), hasOwned ? "" : " (fallback)");
+
+    if (seat->m_pointerFocusResource != lastPointerFocusResource)
+        sendPointerFrame(lastPointerFocusResource);
+
+    sendPointerFrame(seat);
+
+    seat->m_ptrFocusDestroyListener = surf->m_events.destroy.listen([this, seat] { setPointerFocus(seat, nullptr, {}); });
+}
+
 void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& local) {
+    setPointerFocus(Input::ambientSeat(), surf, local);
+}
+
+void CSeatManager::setPointerFocusDefault(SP<CWLSurfaceResource> surf, const Vector2D& local) {
     const bool dndActive = PROTO::data && PROTO::data->dndActive();
 
     if (m_state.pointerFocus == surf)
@@ -394,16 +866,27 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
         return;
     }
 
-    if (g_pInputManager->pointerConstraints().preservesPointerFocus(surf))
-        return;
-
     m_listeners.pointerSurfaceDestroy.reset();
 
-    g_pInputManager->pointerConstraints().release();
-
+    // delivery fallback: also leave resources we may have entered through
+    // another seat when the client had no default-owned resources
+    wl_client* OLDC = m_state.pointerFocus ? m_state.pointerFocus->client() : nullptr;
     for (auto const& p : PROTO::seat->m_pointers) {
         if (!p)
             continue;
+
+        const bool OWNED    = resourceOwnedBy(p->m_owner, defaultSeat());
+        const auto OWNERRES = p->m_owner.lock();
+        const bool ONOLDCLI = OLDC && OWNERRES && OWNERRES->client() == OLDC;
+        if (!OWNED && !ONOLDCLI)
+            continue;
+        // same as the keyboard loop: a carrier held by another seat is not
+        // ours to leave
+        if (resourceHeldByOtherSeat(this, OWNERRES, defaultSeat()))
+            continue;
+
+        if (!OWNED)
+            LOG(Log::INFO, "[seatmgr] default ptr leave via delivery fallback");
 
         p->sendLeave();
     }
@@ -423,8 +906,25 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
     m_state.dndPointerFocus = surf;
 
     auto client = surf->client();
+
+    // delivery fallback: prefer default-owned resources, else use whatever
+    // the client has (e.g. a terminal spawned on seat1 is still usable from
+    // the default seat and vice versa)
+    bool hasOwned = false;
+    for (auto const& r : m_seatResources | std::views::reverse) {
+        if (r->resource->client() == client && resourceOwnedBy(r->resource, defaultSeat())) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    if (!hasOwned)
+        LOG(Log::INFO, "[seatmgr] default ptr enter via delivery fallback");
+
     for (auto const& r : m_seatResources | std::views::reverse) {
         if (r->resource->client() != client)
+            continue;
+        if (hasOwned && !resourceOwnedBy(r->resource, defaultSeat()))
             continue;
 
         m_state.pointerFocusResource = r->resource;
@@ -435,6 +935,8 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
             p->sendEnter(surf, local);
         }
     }
+
+    LOG(Log::INFO, "[seatmgr] default ptr focus -> client {}{}", sc<const void*>(client), hasOwned ? "" : " (fallback)");
 
     if (m_state.pointerFocusResource != lastPointerFocusResource)
         sendPointerFrame(lastPointerFocusResource);
@@ -447,12 +949,31 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
     m_events.dndPointerFocusChange.emit();
 }
 
-void CSeatManager::sendPointerMotion(uint32_t timeMs, const Vector2D& local) {
-    if (!m_state.pointerFocusResource || g_pInputManager->pointerConstraints().blocksAbsoluteMotion())
+void CSeatManager::sendPointerMotion(SP<CSeat> seat, uint32_t timeMs, const Vector2D& local) {
+    const auto FOCUS = (!seat || seat->isDefault()) ? m_state.pointerFocusResource.lock() : seat->m_pointerFocusResource.lock();
+    if (!FOCUS) {
+        LOG(Log::INFO, "[seatmgr] {} dropped: seat focus resource is null", "motion");
+        return;
+    }
+    if (!FOCUS)
         return;
 
+    // P3-lite delivery fallback: see sendKeyboardKey
+    bool hasOwned = false;
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != m_state.pointerFocusResource->client())
+        if (s->resource->client() == FOCUS->client() && s->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    if (!hasOwned)
+        LOG(Log::DEBUG, "[seatmgr] motion delivered via delivery fallback");
+
+    for (auto const& s : m_seatResources) {
+        if (s->resource->client() != FOCUS->client())
+            continue;
+        if (hasOwned && s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& p : s->resource->m_pointers) {
@@ -463,15 +984,44 @@ void CSeatManager::sendPointerMotion(uint32_t timeMs, const Vector2D& local) {
         }
     }
 
-    m_lastLocalCoords = local;
+    if (!seat || seat->isDefault())
+        m_lastLocalCoords = local;
 }
 
-void CSeatManager::sendPointerButton(uint32_t timeMs, uint32_t key, wl_pointer_button_state state_) {
-    if (!m_state.pointerFocusResource || (PROTO::data && PROTO::data->dndActive()))
+void CSeatManager::sendPointerMotion(uint32_t timeMs, const Vector2D& local) {
+    sendPointerMotion(Input::ambientSeat(), timeMs, local);
+}
+
+void CSeatManager::sendPointerButton(SP<CSeat> seat, uint32_t timeMs, uint32_t key, wl_pointer_button_state state_) {
+    if (PROTO::data && PROTO::data->dndActive())
         return;
 
+    const auto FOCUS = (!seat || seat->isDefault()) ? m_state.pointerFocusResource.lock() : seat->m_pointerFocusResource.lock();
+    if (!FOCUS) {
+        LOG(Log::INFO, "[seatmgr] {} dropped: seat focus resource is null", "button");
+        return;
+    }
+    if (!FOCUS)
+        return;
+
+    noteClientInteraction(FOCUS->client(), seat);
+
+    // P3-lite delivery fallback: see sendKeyboardKey
+    bool hasOwned = false;
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != m_state.pointerFocusResource->client())
+        if (s->resource->client() == FOCUS->client() && s->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    if (!hasOwned)
+        LOG(Log::DEBUG, "[seatmgr] button delivered via delivery fallback");
+
+    for (auto const& s : m_seatResources) {
+        if (s->resource->client() != FOCUS->client())
+            continue;
+        if (hasOwned && s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& p : s->resource->m_pointers) {
@@ -483,11 +1033,17 @@ void CSeatManager::sendPointerButton(uint32_t timeMs, uint32_t key, wl_pointer_b
     }
 }
 
-void CSeatManager::sendPointerFrame() {
-    if (!m_state.pointerFocusResource)
-        return;
+void CSeatManager::sendPointerButton(uint32_t timeMs, uint32_t key, wl_pointer_button_state state) {
+    sendPointerButton(Input::ambientSeat(), timeMs, key, state);
+}
 
-    sendPointerFrame(m_state.pointerFocusResource);
+void CSeatManager::sendPointerFrame() {
+    sendPointerFrame(Input::ambientSeat());
+}
+
+void CSeatManager::sendPointerFrame(SP<CSeat> seat) {
+    const auto FOCUS = (!seat || seat->isDefault()) ? m_state.pointerFocusResource.lock() : seat->m_pointerFocusResource.lock();
+    sendPointerFrame(FOCUS);
 }
 
 void CSeatManager::sendPointerFrame(WP<CWLSeatResource> pResource) {
@@ -507,13 +1063,32 @@ void CSeatManager::sendPointerFrame(WP<CWLSeatResource> pResource) {
     }
 }
 
-void CSeatManager::sendPointerAxis(uint32_t timeMs, wl_pointer_axis axis, double value, int32_t discrete, int32_t value120, wl_pointer_axis_source source,
+void CSeatManager::sendPointerAxis(SP<CSeat> seat, uint32_t timeMs, wl_pointer_axis axis, double value, int32_t discrete, int32_t value120, wl_pointer_axis_source source,
                                    wl_pointer_axis_relative_direction relative) {
-    if (!m_state.pointerFocusResource)
+    const auto FOCUS = (!seat || seat->isDefault()) ? m_state.pointerFocusResource.lock() : seat->m_pointerFocusResource.lock();
+    if (!FOCUS) {
+        LOG(Log::INFO, "[seatmgr] {} dropped: seat focus resource is null", "axis");
+        return;
+    }
+    if (!FOCUS)
         return;
 
+    // P3-lite delivery fallback: see sendKeyboardKey
+    bool hasOwned = false;
     for (auto const& s : m_seatResources) {
-        if (s->resource->client() != m_state.pointerFocusResource->client())
+        if (s->resource->client() == FOCUS->client() && s->resource->m_owner.lock() == seat) {
+            hasOwned = true;
+            break;
+        }
+    }
+
+    if (!hasOwned)
+        LOG(Log::DEBUG, "[seatmgr] axis delivered via delivery fallback");
+
+    for (auto const& s : m_seatResources) {
+        if (s->resource->client() != FOCUS->client())
+            continue;
+        if (hasOwned && s->resource->m_owner.lock() != seat)
             continue;
 
         for (auto const& p : s->resource->m_pointers) {
@@ -533,6 +1108,11 @@ void CSeatManager::sendPointerAxis(uint32_t timeMs, wl_pointer_axis axis, double
                 p->sendAxisStop(timeMs, axis);
         }
     }
+}
+
+void CSeatManager::sendPointerAxis(uint32_t timeMs, wl_pointer_axis axis, double value, int32_t discrete, int32_t value120, wl_pointer_axis_source source,
+                                   wl_pointer_axis_relative_direction relative) {
+    sendPointerAxis(Input::ambientSeat(), timeMs, axis, value, discrete, value120, source, relative);
 }
 
 void CSeatManager::sendTouchDown(SP<CWLSurfaceResource> surf, uint32_t timeMs, int32_t id, const Vector2D& local) {
@@ -784,10 +1364,6 @@ void CSeatManager::setCurrentPrimarySelection(SP<IDataSource> source) {
 }
 
 void CSeatManager::setGrab(SP<CSeatGrab> grab) {
-    // Do not grab when we have a lockscreen - no surface should grab in those cases.
-    if (g_pInputManager->isLocked() && grab)
-        return;
-
     if (m_seatGrab) {
         auto oldGrab = m_seatGrab;
 
@@ -894,16 +1470,36 @@ void CSeatManager::setGrab(SP<CSeatGrab> grab) {
 }
 
 void CSeatManager::resendEnterEvents() {
-    SP<CWLSurfaceResource> kb = m_state.keyboardFocus.lock();
-    SP<CWLSurfaceResource> pt = m_state.pointerFocus.lock();
-
+    // legacy default-seat state, resent explicitly (not via the ambient seat)
+    SP<CWLSurfaceResource> kb   = m_state.keyboardFocus.lock();
+    SP<CWLSurfaceResource> pt   = m_state.pointerFocus.lock();
     auto                   last = m_lastLocalCoords;
 
-    setKeyboardFocus(nullptr);
-    setPointerFocus(nullptr, {});
+    setKeyboardFocusDefault(nullptr);
+    setPointerFocusDefault(nullptr, {});
+    setKeyboardFocusDefault(kb);
+    setPointerFocusDefault(pt, last);
 
-    setKeyboardFocus(kb);
-    setPointerFocus(pt, last);
+    // logical seats: restore each seat's own keyboard and pointer focus, not
+    // just the default's, so clients focused by other seats stay entered.
+    // A missed wl_keyboard leave/enter cycle makes apps like kitty render
+    // their window as unfocused (faded text) until the next cursor move.
+    for (auto const& s : m_seats) {
+        if (!s || s->isDefault())
+            continue;
+
+        const auto KB = s->m_keyboardFocus.lock();
+        if (KB) {
+            setKeyboardFocus(s, nullptr);
+            setKeyboardFocus(s, KB);
+        }
+
+        const auto PT = s->m_pointerFocus.lock();
+        if (PT) {
+            setPointerFocus(s, nullptr, {});
+            setPointerFocus(s, PT, s->m_lastPointerLocal);
+        }
+    }
 }
 
 bool CSeatGrab::accepts(SP<CWLSurfaceResource> surf) {
