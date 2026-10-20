@@ -132,6 +132,8 @@ class CInputManager {
     void               destroyTabletPad(SP<CTabletPad>);
     void               destroySwitch(SSwitchDevice*);
 
+    void               refocusForeignSeats();
+
     void               unconstrainMouse();
     bool               isConstrained();
     bool               isLocked();
