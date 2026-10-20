@@ -26,6 +26,7 @@ class CWLSurfaceResource;
 class CWLPointerResource;
 class CWLKeyboardResource;
 class CWLTouchResource;
+class CSeat;
 class CWLSeatResource;
 
 class CCursorSurfaceRole : public ISurfaceRole {
@@ -155,7 +156,10 @@ class CWLSeatResource {
     std::vector<WP<CWLKeyboardResource>> m_keyboards;
     std::vector<WP<CWLTouchResource>>    m_touches;
 
-    WP<CWLSeatResource>                  m_self;
+    // P3-lite: the logical seat this resource belongs to; set at bind time
+    WP<CSeat>           m_owner;
+
+    WP<CWLSeatResource> m_self;
 
     struct {
         CSignalT<> destroy;
