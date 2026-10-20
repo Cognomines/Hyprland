@@ -60,6 +60,7 @@
 #include "../../render/Renderer.hpp"
 #include "trackpad/TrackpadGestures.hpp"
 #include "../../pointer/cursor/CursorShapeOverrideController.hpp"
+#include "SeatContext.hpp"
 
 #include <aquamarine/input/Input.hpp>
 #include <hyprutils/string/VarList.hpp>
@@ -1842,7 +1843,7 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
     // use merged keys states when sending to ime or when sending to seat with no ime
     // if passing from ime, send keys directly without merging
     if (USEIME || !HASIME) {
-        const auto ANYPRESSED = shareKeyFromAllKBs(event.keycode, pressed);
+        const auto ANYPRESSED = shareKeyFromAllKBs(pKeyboard, event.keycode, pressed);
 
         // do not turn released event into pressed event (when one keyboard has a key released but some
         // other keyboard still has the key pressed)
@@ -1896,7 +1897,7 @@ void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
         PROTO::inputCapture->modifiers(MODS.depressed, MODS.latched, MODS.locked, MODS.group);
 
         if (PROTO::inputCapture->isCaptured()) {
-            seat()->m_lastMods = shareModsFromAllKBs(DEPRESSED_MODS_HL);
+            seat()->m_lastMods = shareModsFromAllKBs(pKeyboard, DEPRESSED_MODS_HL);
             return;
         }
     }
@@ -1904,7 +1905,7 @@ void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
     // use merged mods states when sending to ime or when sending to seat with no ime
     // if passing from ime, send mods directly without merging
     if (USEIME || !HASIME) {
-        const auto ALLMODS = shareModsFromAllKBs(DEPRESSED_MODS_HL);
+        const auto ALLMODS = shareModsFromAllKBs(pKeyboard, DEPRESSED_MODS_HL);
         MODS.depressed |= hyprlandModsToXkb(pKeyboard, ALLMODS);
         seat()->m_lastMods = ALLMODS;
     }
@@ -2519,7 +2520,7 @@ void CInputManager::refocusForeignSeats() {
             continue;
 
         // quick hit-test: is the cursor actually over a surface?
-        const auto CURSOR   = Pointer::mgr()->position(s);
+        const auto CURSOR   = Pointer::mgr()->position(); // use current position for now, will be per-seat later
         const auto PMONITOR = State::monitorState()->query().vec(CURSOR).run();
         if (!PMONITOR)
             continue;

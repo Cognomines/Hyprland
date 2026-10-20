@@ -8,6 +8,7 @@
 #include "InputMethodRelay.hpp"
 #include "PointerConstraintController.hpp"
 #include "Seat.hpp"
+#include "SeatContext.hpp"
 #include "../../helpers/signal/Signal.hpp"
 #include "../../desktop/view/WLSurface.hpp"
 #include "../../devices/IPointer.hpp"

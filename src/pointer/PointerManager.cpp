@@ -173,6 +173,10 @@ Vector2D CPointerManager::untransformedPosition() const {
     return m_pointerPos;
 }
 
+Vector2D CPointerManager::position(SP<CSeat> seat) {
+    return posRefFor(seat);
+}
+
 Vector2D CPointerManager::hotspot() {
     return m_currentCursorImage.hotspot;
 }
