@@ -53,10 +53,26 @@ namespace Desktop {
         PHLWINDOW              window();
         PHLMONITOR             monitor();
 
+        // logical seats: the focus a bind on a non-default seat should act on.
+        // Same as window()/monitor(), except the ambient seat's own focus is
+        // preferred over the (default seat) singleton when one exists. Falls
+        // back to window()/monitor() semantics everywhere else, so behavior
+        // outside a foreign-seat bind scope is unchanged.
+        PHLWINDOW  activeWindow();
+        PHLMONITOR activeMonitor();
+
+        // explicit override, used by dispatchers that resolve the target
+        // themselves (e.g. per-seat layout messages)
+        void setAmbientOverride(PHLWINDOW window, PHLMONITOR monitor);
+        void clearAmbientOverride();
+
       private:
         WP<CWLSurfaceResource> m_focusSurface;
         PHLWINDOWREF           m_focusWindow;
         PHLMONITORREF          m_focusMonitor;
+
+        PHLWINDOW              m_ambientWindowOverride  = nullptr;
+        PHLMONITOR             m_ambientMonitorOverride = nullptr;
 
         CHyprSignalListener    m_windowOpen, m_windowClose;
     };

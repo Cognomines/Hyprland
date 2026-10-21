@@ -52,8 +52,15 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     if (!PMONITOR || !PMONITOR->m_activeWorkspace || PMONITOR->m_size.x <= 0 || PMONITOR->m_size.y <= 0)
         return;
 
-    if (PMONITOR != Desktop::focusState()->monitor())
+    // only default-seat input drives the global focus monitor
+    const auto OWNER = e.device->m_seat.lock();
+    if (OWNER && OWNER->isDefault() && PMONITOR != Desktop::focusState()->monitor())
         Desktop::focusState()->rawMonitorFocus(PMONITOR);
+
+    // a touch-press may become a drag; record the triggering seat so a
+    // touch-initiated dnd is owned by it
+    if (PROTO::data && OWNER)
+        PROTO::data->notePressSeat(OWNER);
 
     const auto TOUCH_COORDS = PMONITOR->m_position + (e.pos * PMONITOR->m_size);
 

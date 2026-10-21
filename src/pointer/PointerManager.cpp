@@ -15,6 +15,7 @@
 #include "../render/pass/ClearPassElement.hpp"
 #include "../render/pass/TexPassElement.hpp"
 #include "../managers/input/InputManager.hpp"
+#include "../managers/input/SeatContext.hpp"
 #include "../render/Renderer.hpp"
 #include "../render/OpenGL.hpp"
 #include "../desktop/state/FocusState.hpp"
@@ -490,7 +491,11 @@ SP<CSeat> CPointerManager::seatForDevice(SP<IHID> dev) {
             return SEAT;
     }
 
-    return g_pSeatManager->defaultSeat();
+    // no driving device (e.g. keybind-triggered cursor warps): route to the
+    // ambient seat so a bind pressed on a foreign seat moves that seat's
+    // cursor instead of always the default seat's. Outside a bind scope the
+    // ambient seat is the default seat, so behavior is unchanged.
+    return Input::ambientSeat();
 }
 
 Vector2D& CPointerManager::posRefFor(SP<CSeat> seat) {
@@ -540,9 +545,13 @@ void CPointerManager::damageForeignCursor(SP<CSeat> seat, const Vector2D& oldPos
     }
 }
 
->>>>>>> e4003b675 (input,pointer: per-seat input routing + dual-cursor rendering)
 bool CPointerManager::attemptHardwareCursor(SP<CPointerManager::SMonitorPointerState> state) {
     auto output = state->monitor->m_output;
+
+    // P4-lite: hardware plane can only show one cursor; fall back to software
+    // rendering while any non-default seat has an active cursor
+    if (hasForeignCursors())
+        return false;
 
     if (!(output->getBackend()->capabilities() & Aquamarine::IBackendImplementation::eBackendCapabilities::AQ_BACKEND_CAPABILITY_POINTER))
         return false;
@@ -799,7 +808,8 @@ void CPointerManager::renderSoftwareCursorsFor(Render::CRenderContext& ctx, PHLM
 
     auto state = stateFor(pMonitor);
 
-    if (!state->hardwareFailed && state->softwareLocks == 0 && !screencopy) {
+    // P4-lite: foreign cursors force software rendering for this output
+    if (!state->hardwareFailed && state->softwareLocks == 0 && !screencopy && !hasForeignCursors()) {
         if (m_currentCursorImage.surface && !ctx.m_blockSurfaceFeedback)
             m_currentCursorImage.surface->resource()->frame(now);
         return;
@@ -814,29 +824,52 @@ void CPointerManager::renderSoftwareCursorsFor(Render::CRenderContext& ctx, PHLM
     auto& image = cursorImageForMonitor(pMonitor);
     auto  box   = overridePos ? image.logicalBox(*overridePos) : state->box.copy();
 
-    if (box.intersection(CBox{{}, {pMonitor->m_size}}).empty())
-        return;
-
-    auto texture = cursorTextureForImage(image);
+    auto  texture = cursorTextureForImage(image);
     if (!texture)
         return;
 
-    const auto logicalBox = box.copy();
+    // P4-lite: the default cursor only draws on the monitor it currently
+    // occupies; every foreign seat's cursor is checked against this monitor
+    // independently below, so it can travel across all monitors.
+    if (!box.intersection(CBox{{}, {pMonitor->m_size}}).empty()) {
+        const auto logicalBox = box.copy();
 
-    box.scale(pMonitor->m_scale);
-    box.x = std::round(box.x);
-    box.y = std::round(box.y);
+        box.scale(pMonitor->m_scale);
+        box.x = std::round(box.x);
+        box.y = std::round(box.y);
 
-    CTexPassElement::SRenderData data;
-    data.tex = texture;
-    data.box = box.round();
+        CTexPassElement::SRenderData data;
+        data.tex = texture;
+        data.box = box.round();
 
-    g_pHyprRenderer->addPassElement(ctx, makeUnique<CTexPassElement>(std::move(data)));
+        g_pHyprRenderer->addPassElement(ctx, makeUnique<CTexPassElement>(std::move(data)));
 
-    // to erase the leftover in updateCursorBackend()
-    if (!screencopy) {
-        state->swRendered    = true;
-        state->swRenderedBox = logicalBox;
+        // to erase the leftover in updateCursorBackend()
+        if (!screencopy) {
+            state->swRendered    = true;
+            state->swRenderedBox = logicalBox;
+        }
+    }
+
+    // P4-lite: draw every other active seat's cursor with the same image
+    for (auto const& s : g_pSeatManager->seats()) {
+        if (s->isDefault() || !s->m_cursorActive || !s->hasLiveDevices())
+            continue;
+
+        auto sbox = image.logicalBox(s->m_cursorPos - pMonitor->m_position);
+
+        if (sbox.intersection(CBox{{}, {pMonitor->m_size}}).empty())
+            continue;
+
+        sbox.scale(pMonitor->m_scale);
+        sbox.x = std::round(sbox.x);
+        sbox.y = std::round(sbox.y);
+
+        CTexPassElement::SRenderData sdata;
+        sdata.tex = texture;
+        sdata.box = sbox.round();
+
+        g_pHyprRenderer->addPassElement(ctx, makeUnique<CTexPassElement>(std::move(sdata)));
     }
 
     if (m_currentCursorImage.surface && !ctx.m_blockSurfaceFeedback)
@@ -971,7 +1004,7 @@ void CPointerManager::warpTo(const Vector2D& logical, SP<IHID> dev) {
     ensureBackendModeUpdated();
     damageIfSoftware();
 
-    m_pointerPos = closestValid(logical);
+    POS = closestValid(logical);
 
     if (SEAT->isDefault()) {
         if (!g_pInputManager->isLocked()) {
@@ -982,7 +1015,6 @@ void CPointerManager::warpTo(const Vector2D& logical, SP<IHID> dev) {
         return;
     }
 
-    POS                  = closestValid(POS);
     SEAT->m_cursorActive = true;
     damageForeignCursor(SEAT, OLD_POS);
     if (!g_pInputManager->isLocked()) {
@@ -1122,7 +1154,7 @@ void CPointerManager::warpAbsolute(Vector2D abs, SP<IHID> dev, WP<Aquamarine::IO
         POS               = mappedToSourceOutput ? mappedArea.closestPoint(MAPPED) : MAPPED;
     }
 
-    POS = closestValid(POS);
+    POS                  = closestValid(POS);
     SEAT->m_cursorActive = true;
 
     if (SEAT->isDefault()) {

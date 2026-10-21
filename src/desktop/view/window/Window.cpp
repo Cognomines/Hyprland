@@ -59,7 +59,10 @@
 #include "../../../render/scene/SceneSelection.hpp"
 #include "../../../ipc/s2/S2.hpp"
 #include "../../../managers/input/InputManager.hpp"
+#include "../../../managers/input/SeatContext.hpp"
+#include "../../../managers/SeatManager.hpp"
 #include "../../../pointer/PointerController.hpp"
+#include "../../../pointer/PointerManager.hpp"
 #include "../../../managers/fullscreen/FullscreenController.hpp"
 #include "../../../layout/algorithm/Algorithm.hpp"
 #include "../../../layout/space/Space.hpp"
@@ -72,6 +75,7 @@
 #include <hyprutils/string/Numeric.hpp>
 #include <hyprutils/string/VarList.hpp>
 #include <hyprutils/string/VarList2.hpp>
+#include <vector>
 
 using namespace Hyprutils::String;
 using namespace Hyprutils::Animation;
@@ -1160,6 +1164,24 @@ void CWindow::mapWindow() {
         Desktop::focusState()->rawMonitorFocus(State::monitorState()->query().vec({}).run());
         PMONITOR = Desktop::focusState()->monitor();
     }
+
+    // logical seats: a client spawns where its spawning seat is working (its
+    // focused window's monitor, cursor as fallback), not where the default
+    // seat's global focus monitor points. A client owned by the default seat
+    // can still be driven by a foreign seat: a menu opened by its click (or
+    // an app launched from it) belongs on the interacting seat's screen, so
+    // the last click/keystroke wins here.
+    const auto SURF   = wlSurface();
+    wl_client* CLIENT = SURF && SURF->resource() ? SURF->resource()->client() : nullptr;
+    auto       SEAT   = Input::seatForSurfacePlacement(Input::seatForPid(m_backend->pid()), CLIENT);
+
+    if (SEAT && !SEAT->isDefault()) {
+        if (auto SEATMONITOR = Input::seatTargetMonitor(SEAT)) {
+            LOG(Log::INFO, "[seatmgr] window {:x} spawned by seat '{}', placing on monitor {}", (uintptr_t)this, SEAT->name(), SEATMONITOR->m_name);
+            PMONITOR = SEATMONITOR;
+        }
+    }
+
     if (!PMONITOR || (!PMONITOR->m_activeSpecialWorkspace && !PMONITOR->m_activeWorkspace)) {
         LOG(Log::ERR, "mapWindow: no valid monitor/workspace, aborting map for {:x}", (uintptr_t)this);
         return;
@@ -1445,6 +1467,10 @@ void CWindow::mapWindow() {
     ) {
         // add to group if we are focused on one
         Desktop::focusState()->window()->grouping().group()->add(m_self.lock());
+    } else if (SEAT && !SEAT->isDefault()) {
+        // layout split direction follows the spawning seat's cursor
+        const Input::SScopedAmbientSeat SEAT_SCOPE{SEAT};
+        g_layoutManager->newTarget(m_target, m_workspace->space());
     } else
         g_layoutManager->newTarget(m_target, m_workspace->space());
 
@@ -1511,8 +1537,14 @@ void CWindow::mapWindow() {
 
         // don't steal pointer focus with X11 when buttons are held (e.g., during drags)
         // if the incoming window is an OR
-        if (!m_backend->isX11() || !g_pInputManager->hasHeldButtons() || !TRAITS.overrideRedirect)
-            Desktop::focusState()->fullWindowFocus(m_self.lock(), FOCUS_REASON_NEW_WINDOW);
+        if (!m_backend->isX11() || !g_pInputManager->hasHeldButtons() || !TRAITS.overrideRedirect) {
+            // logical seats: a window spawned by a foreign seat focuses its spawning seat
+            // only, so the default seat's global focus and monitor stay where they are
+            if (SEAT && !SEAT->isDefault())
+                g_pSeatManager->setKeyboardFocus(SEAT, m_backend->surface());
+            else
+                Desktop::focusState()->fullWindowFocus(m_self.lock(), FOCUS_REASON_NEW_WINDOW);
+        }
 
         m_presentation->alpha(WINDOW_ALPHA_ACTIVE)->setValueAndWarp(*PACTIVEALPHA);
         m_presentation->warpDimPercent(m_ruleApplicator->noDim().valueOrDefault() ? 0.F : *PDIMSTRENGTH);
@@ -1612,6 +1644,20 @@ void CWindow::unmapWindow() {
         LOG(Log::WARN, "{} unmapped without being mapped??", m_self.lock());
         return;
     }
+
+    // logical seats: snapshot which non-default seats have this window as their
+    // keyboard focus *before* unmap listeners can destroy the surface resource
+    std::vector<SP<CSeat>> AFFECTED_SEATS;
+    const auto             CLOSING_SURFACE = wlSurface()->resource();
+    for (auto const& s : g_pSeatManager->seats()) {
+        if (!s || s->isDefault())
+            continue;
+        if (s->m_keyboardFocus.lock() == CLOSING_SURFACE)
+            AFFECTED_SEATS.push_back(s);
+    }
+
+    LOG(Log::INFO, "[seatmgr] unmapWindow: {} affected seat(s) for window {:x}, WAS_FOCUSED={}, globalFocus={}", AFFECTED_SEATS.size(), (uintptr_t)this, WAS_FOCUSED,
+        sc<const void*>(Desktop::focusState()->window().get()));
 
     const auto PMONITOR = m_monitor.lock();
 
@@ -1726,6 +1772,53 @@ void CWindow::unmapWindow() {
         }
     } else {
         LOG(Log::DEBUG, "Unmapped was not focused, ignoring a refocus.");
+    }
+
+    // logical seats: always refocus any non-default seat that was keyboard-focused
+    // on this window, regardless of wasLastWindow (which only reflects global state).
+    // Each seat resolves its own monitor from its cursor position.
+    static auto PFOCUSCLOSE = CConfigValue<Config::INTEGER>("input:focus_on_close");
+    for (auto const& s : AFFECTED_SEATS) {
+        LOG(Log::INFO, "[seatmgr] seat '{}' lost focused window {}, refocusing (focus_on_close={})", s->name(), m_self.lock(), *PFOCUSCLOSE);
+
+        const auto SEAT_CURSOR_POS = Pointer::mgr()->position(s);
+        const auto SEAT_MONITOR    = State::monitorState()->query().vec(SEAT_CURSOR_POS).run();
+
+        if (!SEAT_MONITOR) {
+            LOG(Log::INFO, "[seatmgr] seat '{}' no monitor from cursor, skipping", s->name());
+            g_pSeatManager->setKeyboardFocus(s, nullptr);
+            continue;
+        }
+
+        PHLWINDOW seatCandidate = nullptr;
+
+        if (*PFOCUSCLOSE == 1)
+            seatCandidate =
+                Desktop::viewState()->hitTest().windowAt(SEAT_CURSOR_POS, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+        else {
+            const auto CAND = g_layoutManager->getNextCandidate(m_workspace->space(), layoutTarget());
+            if (CAND)
+                seatCandidate = CAND->window();
+        }
+
+        LOG(Log::INFO, "[seatmgr] seat '{}' candidate: {}", s->name(), sc<const void*>(seatCandidate.get()));
+
+        if (seatCandidate && SEAT_MONITOR->m_activeSpecialWorkspace && seatCandidate->m_workspace != SEAT_MONITOR->m_activeSpecialWorkspace)
+            seatCandidate = nullptr;
+
+        // only focus windows on the same monitor as the seat's cursor
+        if (seatCandidate && seatCandidate->m_monitor.lock() != SEAT_MONITOR)
+            seatCandidate = nullptr;
+
+        LOG(Log::INFO, "[seatmgr] seat '{}' final candidate: {} (monitor={})", s->name(), sc<const void*>(seatCandidate.get()), SEAT_MONITOR->m_name);
+
+        if (seatCandidate) {
+            g_pSeatManager->setKeyboardFocus(s, seatCandidate->wlSurface()->resource());
+            s->m_focusWindow = seatCandidate;
+        } else {
+            g_pSeatManager->setKeyboardFocus(s, nullptr);
+            s->m_focusWindow = nullptr;
+        }
     }
 
     if (!m_backend->traits().suggestsNoBorder)                              // don't animate out if they weren't animated in.

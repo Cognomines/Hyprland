@@ -124,7 +124,7 @@ static std::optional<int64_t> offsetAvailableWorkspace(uint32_t current, int64_t
 // contains [] -> workspace filters, this is bad input for the resolver
 // fallback: named or ID'd workspace
 State::Workspace::STarget CWorkspaceResolver::getWorkspaceTargetFromString(const std::string& in, std::optional<PHLMONITOR> baseMon) {
-    const auto BASEMONITOR = baseMon.value_or(Desktop::focusState()->monitor());
+    const auto BASEMONITOR = baseMon.value_or(Desktop::focusState()->activeMonitor());
     if (in.empty())
         return {};
 

@@ -19,6 +19,8 @@
 #include "../../../ipc/s2/S2.hpp"
 #include "../../../keybinds/Manager.hpp"
 #include "../../../managers/input/InputManager.hpp"
+#include "../../../managers/input/Seat.hpp"
+#include "../../../managers/input/SeatContext.hpp"
 #include "../../../managers/fullscreen/FullscreenController.hpp"
 #include "../../../managers/eventLoop/EventLoopManager.hpp"
 #include "../../../layout/LayoutManager.hpp"
@@ -54,8 +56,32 @@ UP<CActionState>& Actions::state() {
     return p;
 }
 
+const std::string& Actions::currentSubmapFor(const std::string& seatName) {
+    static const std::string EMPTY;
+    const auto&              submaps = state()->m_submaps;
+    const auto               IT      = submaps.find(seatName);
+    return IT == submaps.end() ? EMPTY : IT->second;
+}
+
+void Actions::setCurrentSubmapFor(const std::string& seatName, const std::string& submap) {
+    state()->m_submaps.insert_or_assign(seatName, submap);
+}
+
 static PHLWINDOW xtract(std::optional<PHLWINDOW> window) {
-    return window.value_or(Desktop::focusState()->window());
+    if (window)
+        return *window;
+
+    // logical seats: non-default seats resolve from their per-seat focus
+    // rather than the global focus state, so keybinds on a foreign seat
+    // (e.g. SUPER+Q to close) act on the window that seat is typing into
+    const auto SEAT = Input::ambientSeat();
+    if (SEAT && !SEAT->isDefault()) {
+        const auto W = SEAT->m_focusWindow.lock();
+        if (W)
+            return W;
+    }
+
+    return Desktop::focusState()->window();
 }
 
 static void updateRelativeCursorCoords() {
@@ -64,15 +90,16 @@ static void updateRelativeCursorCoords() {
     if (*PNOWARPS)
         return;
 
-    if (Desktop::focusState()->window())
-        Desktop::focusState()->window()->m_relativeCursorCoordsOnLastWarp = g_pInputManager->getMouseCoordsInternal() - Desktop::focusState()->window()->layoutBox().pos();
+    if (Desktop::focusState()->activeWindow())
+        Desktop::focusState()->activeWindow()->m_relativeCursorCoordsOnLastWarp =
+            g_pInputManager->getMouseCoordsInternal() - Desktop::focusState()->activeWindow()->layoutBox().pos();
 }
 
 static void switchToWindow(PHLWINDOW PWINDOWTOCHANGETO, bool forceFSCycle = false) {
     static auto PFOLLOWMOUSE = CConfigValue<Config::INTEGER>("input:follow_mouse");
     static auto PNOWARPS     = CConfigValue<Config::INTEGER>("cursor:no_warps");
 
-    const auto  PLASTWINDOW = Desktop::focusState()->window();
+    const auto  PLASTWINDOW = Desktop::focusState()->activeWindow();
 
     if (PWINDOWTOCHANGETO == PLASTWINDOW || !PWINDOWTOCHANGETO)
         return;
@@ -106,7 +133,7 @@ static bool tryMoveFocusToMonitor(PHLMONITOR monitor) {
     if (!monitor)
         return false;
 
-    const auto LASTMONITOR = Desktop::focusState()->monitor();
+    const auto LASTMONITOR = Desktop::focusState()->activeMonitor();
     if (!LASTMONITOR || LASTMONITOR == monitor)
         return false;
 
@@ -135,6 +162,12 @@ static bool tryMoveFocusToMonitor(PHLMONITOR monitor) {
     }
     Desktop::focusState()->rawMonitorFocus(monitor);
 
+    // per-seat mirror: the ambient seat's monitor focus so that monitor
+    // resolution (e.g. hl.get_active_monitor after focus) works even when
+    // cursor warps are disabled and the cursor never left its monitor
+    if (const auto SEAT = Input::ambientSeat(); SEAT && !SEAT->isDefault())
+        SEAT->m_focusMonitor = monitor;
+
     return true;
 }
 
@@ -154,7 +187,7 @@ static PHLWORKSPACE findOrCreateWorkspace(const State::Workspace::STarget target
 
     auto ws = State::Workspace::state()->find(target);
     if (!ws) {
-        const auto PMONITOR = Desktop::focusState()->monitor();
+        const auto PMONITOR = Desktop::focusState()->activeMonitor();
         if (PMONITOR)
             ws = State::Workspace::state()->create(target, PMONITOR, false);
     }
@@ -170,7 +203,7 @@ static PHLWORKSPACE findOrCreateWorkspace(const std::string& args) {
 static PHLWORKSPACE resolveWorkspaceForChange(const std::string& args) {
     static auto PBACKANDFORTH = CConfigValue<Config::INTEGER>("binds:workspace_back_and_forth");
 
-    const auto  PMONITOR = Desktop::focusState()->monitor();
+    const auto  PMONITOR = Desktop::focusState()->activeMonitor();
     if (!PMONITOR)
         return nullptr;
 
@@ -401,7 +434,7 @@ ActionResult Actions::moveToWorkspace(PHLWORKSPACE ws, bool silent, std::optiona
         const auto OLDMIDDLE = window->middle();
         Desktop::globalWindowController()->moveWindowToWorkspace(window, ws);
 
-        if (window->m_workspace != POLDWS && window == Desktop::focusState()->window()) {
+        if (window->m_workspace != POLDWS && window == Desktop::focusState()->activeWindow()) {
             if (const auto PATCOORDS =
                     Desktop::viewState()->hitTest().windowAt(OLDMIDDLE, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING, window);
                 PATCOORDS)
@@ -448,10 +481,10 @@ ActionResult Actions::moveFocus(Math::eDirection dir) {
     static auto PGROUPCYCLE      = CConfigValue<Config::INTEGER>("binds:movefocus_cycles_groupfirst");
     static auto PMONITORFALLBACK = CConfigValue<Config::INTEGER>("binds:window_direction_monitor_fallback");
 
-    const auto  PLASTWINDOW = Desktop::focusState()->window();
+    const auto  PLASTWINDOW = Desktop::focusState()->activeWindow();
     if (!PLASTWINDOW || !PLASTWINDOW->mapped() || !PLASTWINDOW->acceptsInput()) {
         if (*PMONITORFALLBACK)
-            tryMoveFocusToMonitor(State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).inDirection(dir).run());
+            tryMoveFocusToMonitor(State::monitorState()->query().relativeTo(Desktop::focusState()->activeMonitor()).inDirection(dir).run());
         return {};
     }
 
@@ -477,7 +510,7 @@ ActionResult Actions::moveFocus(Math::eDirection dir) {
         return {};
     }
 
-    if (*PMONITORFALLBACK && tryMoveFocusToMonitor(State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).inDirection(dir).run()))
+    if (*PMONITORFALLBACK && tryMoveFocusToMonitor(State::monitorState()->query().relativeTo(Desktop::focusState()->activeMonitor()).inDirection(dir).run()))
         return {};
 
     static auto PNOFALLBACK = CConfigValue<Config::INTEGER>("general:no_focus_fallback");
@@ -542,8 +575,8 @@ ActionResult Actions::focus(PHLWINDOW window) {
 
     updateRelativeCursorCoords();
 
-    if (Desktop::focusState()->monitor() && Desktop::focusState()->monitor()->m_activeWorkspace != window->m_workspace &&
-        Desktop::focusState()->monitor()->m_activeSpecialWorkspace != window->m_workspace) // NOLINTNEXTLINE
+    if (Desktop::focusState()->activeMonitor() && Desktop::focusState()->activeMonitor()->m_activeWorkspace != window->m_workspace &&
+        Desktop::focusState()->activeMonitor()->m_activeSpecialWorkspace != window->m_workspace) // NOLINTNEXTLINE
         Actions::changeWorkspace(PWORKSPACE);
 
     Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_DISPATCH_FOCUSWINDOW, nullptr, false);
@@ -628,7 +661,7 @@ ActionResult Actions::focusCurrentOrLast() {
 ActionResult Actions::focusUrgentOrLast() {
     const auto& HISTORY       = Desktop::History::windowTracker()->fullHistory();
     const auto  PWINDOWURGENT = Desktop::viewState()->query().urgent().runWindow();
-    const auto  PWINDOWPREV   = Desktop::focusState()->window() ? (HISTORY.size() < 2 ? nullptr : HISTORY[1].lock()) : (HISTORY.empty() ? nullptr : HISTORY[0].lock());
+    const auto  PWINDOWPREV   = Desktop::focusState()->activeWindow() ? (HISTORY.size() < 2 ? nullptr : HISTORY[1].lock()) : (HISTORY.empty() ? nullptr : HISTORY[0].lock());
 
     if (!PWINDOWURGENT && !PWINDOWPREV)
         return actionError("Window not found", eActionErrorLevel::INFO, eActionErrorCode::NOT_FOUND);
@@ -1026,7 +1059,7 @@ ActionResult Actions::changeWorkspace(PHLWORKSPACE ws) {
     static auto PHIDESPECIALONWORKSPACECHANGE = CConfigValue<Config::INTEGER>("binds:hide_special_on_workspace_change");
     static auto PWORKSPACECENTERON            = CConfigValue<Config::INTEGER>("binds:workspace_center_on");
 
-    const auto  PMONITOR = Desktop::focusState()->monitor();
+    const auto  PMONITOR = Desktop::focusState()->activeMonitor();
     if (!PMONITOR)
         return actionError("No focused monitor", eActionErrorLevel::WARNING, eActionErrorCode::INVALID_STATE);
 
@@ -1127,7 +1160,7 @@ ActionResult Actions::changeWorkspaceOnCurrentMonitor(PHLWORKSPACE ws) {
     if (!ws)
         return actionError("Bad workspace", eActionErrorLevel::WARNING, eActionErrorCode::NO_TARGET);
 
-    const auto PCURRMONITOR = Desktop::focusState()->monitor();
+    const auto PCURRMONITOR = Desktop::focusState()->activeMonitor();
     if (!PCURRMONITOR)
         return actionError("No focused monitor", eActionErrorLevel::WARNING, eActionErrorCode::INVALID_STATE);
 
@@ -1155,7 +1188,7 @@ ActionResult Actions::toggleSpecial(PHLWORKSPACE special) {
     if (!special || special->type() != Workspace::eWorkspaceType::SPECIAL)
         return actionError("Bad special workspace", eActionErrorLevel::WARNING, eActionErrorCode::NO_TARGET);
 
-    const auto PMONITOR = Desktop::focusState()->monitor();
+    const auto PMONITOR = Desktop::focusState()->activeMonitor();
     if (!PMONITOR)
         return actionError("No focused monitor", eActionErrorLevel::WARNING, eActionErrorCode::INVALID_STATE);
 
@@ -1216,9 +1249,23 @@ ActionResult Actions::swapActiveWorkspaces(PHLMONITOR mon1, PHLMONITOR mon2) {
 }
 
 ActionResult Actions::layoutMessage(const std::string& msg) {
+    // the ambient seat's own focus/monitor, so a layout message dispatched
+    // on a foreign seat acts on that seat's workspace instead of the
+    // default seat's
+    const auto SEAT = Input::ambientSeat();
+    if (SEAT && !SEAT->isDefault()) {
+        auto win = SEAT->m_focusWindow.lock();
+        auto pos = Pointer::mgr()->position(SEAT);
+        auto mon = State::monitorState()->query().vec(pos).run();
+        Desktop::focusState()->setAmbientOverride(win, mon);
+    }
+
     auto ret = g_layoutManager->layoutMsg(msg);
     if (!ret)
         return std::unexpected(ret.error());
+
+    Desktop::focusState()->clearAmbientOverride();
+
     return {};
 }
 
@@ -1267,7 +1314,7 @@ ActionResult Actions::forceRendererReload() {
 }
 
 ActionResult Actions::toggleSwallow() {
-    const auto WINDOW = Desktop::focusState()->window();
+    const auto WINDOW = Desktop::focusState()->activeWindow();
     if (WINDOW)
         WINDOW->swallowing().toggle();
 
@@ -1424,7 +1471,7 @@ ActionResult Actions::moveOutOfGroup(Math::eDirection direction, std::optional<P
 }
 
 ActionResult Actions::moveGroupWindow(bool forward) {
-    const auto PLASTWINDOW = Desktop::focusState()->window();
+    const auto PLASTWINDOW = Desktop::focusState()->activeWindow();
     if (!PLASTWINDOW)
         return actionError("No window found", eActionErrorLevel::INFO, eActionErrorCode::NO_TARGET);
 
@@ -1488,7 +1535,7 @@ ActionResult Actions::moveWindowOrGroup(Math::eDirection direction, std::optiona
 }
 
 ActionResult Actions::denyWindowFromGroup(eTogglableAction action) {
-    const auto PWINDOW = Desktop::focusState()->window();
+    const auto PWINDOW = Desktop::focusState()->activeWindow();
     if (!PWINDOW || !PWINDOW->grouping().group())
         return {};
 
@@ -1514,7 +1561,7 @@ ActionResult Actions::pass(std::optional<PHLWINDOW> w) {
     auto        constraintGuard = g_pInputManager->pointerConstraints().suspend();
 
     const auto& S             = *Config::Actions::state();
-    const auto  XWTOXW        = window->backend().isX11() && Desktop::focusState()->window() && Desktop::focusState()->window()->backend().isX11();
+    const auto  XWTOXW        = window->backend().isX11() && Desktop::focusState()->activeWindow() && Desktop::focusState()->activeWindow()->backend().isX11();
     const auto  LASTMOUSESURF = g_pSeatManager->m_state.pointerFocus.lock();
     const auto  LASTKBSURF    = g_pSeatManager->m_state.keyboardFocus.lock();
 
@@ -1590,10 +1637,10 @@ ActionResult Actions::pass(Input::ModifierMask modMask, uint32_t key, std::optio
             g_pSeatManager->setPointerFocus(window->wlSurface()->resource(), {1, 1});
 
         // if wl -> xwl, activate destination
-        if (window->backend().isX11() && Desktop::focusState()->window() && !Desktop::focusState()->window()->backend().isX11())
+        if (window->backend().isX11() && Desktop::focusState()->activeWindow() && !Desktop::focusState()->activeWindow()->backend().isX11())
             g_pXWaylandManager->activateSurface(window->wlSurface()->resource(), true);
         // if xwl -> xwl, send to current
-        if (window->backend().isX11() && Desktop::focusState()->window() && Desktop::focusState()->window()->backend().isX11())
+        if (window->backend().isX11() && Desktop::focusState()->activeWindow() && Desktop::focusState()->activeWindow()->backend().isX11())
             window = nullptr;
     }
 
@@ -1728,15 +1775,18 @@ ActionResult Actions::mouse(const std::string& action) {
 }
 
 ActionResult Actions::setSubmap(const std::string& submap) {
+    // executed from a bind dispatcher: the ambient seat is the triggering seat
+    const auto SEAT = Input::ambientSeat();
+
     if (submap == "reset" || submap.empty()) {
-        Config::Actions::state()->m_currentSubmap = "";
+        Actions::setCurrentSubmapFor(SEAT->name(), "");
         IPC::Socket2::sock()->postEvent({.event = "submap", .data = ""});
         Event::bus()->m_events.keybinds.submap.emit(std::string(""));
         return {};
     }
 
     if (Keybinds::mgr()->registry().hasSubmap(submap)) {
-        Config::Actions::state()->m_currentSubmap = submap;
+        Actions::setCurrentSubmapFor(SEAT->name(), submap);
         IPC::Socket2::sock()->postEvent({.event = "submap", .data = submap});
         Event::bus()->m_events.keybinds.submap.emit(submap);
         return {};
@@ -1749,7 +1799,7 @@ ActionResult Actions::cycleNext(const bool next, std::optional<bool> onlyTiled, 
     auto window = xtract(w);
 
     if (!window) {
-        const auto PWS = Desktop::focusState()->monitor()->m_activeWorkspace;
+        const auto PWS = Desktop::focusState()->activeMonitor()->m_activeWorkspace;
         if (PWS && PWS->getWindowCount() > 0) {
             const auto PFIRST = PWS->getFirstWindow();
             switchToWindow(PFIRST);

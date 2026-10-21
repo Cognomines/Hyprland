@@ -101,6 +101,10 @@ static const float MATRICES[8][6] = {{// normal
                                      {// flipped + rotation 270°
                                       0, -1, 1, -1, 0, 1}};
 
+namespace Pointer {
+    class CPointerManager;
+}
+
 class CInputManager {
   public:
     CInputManager();
@@ -318,13 +322,14 @@ class CInputManager {
         std::string                   name; // if not empty, means set by name.
     } m_cursorSurfaceInfo;
 
-    void restoreCursorIconToApp(); // no-op if restored
+    void                  restoreCursorIconToApp(); // no-op if restored
 
     std::vector<uint32_t> m_pressed;
     Input::ModifierMask   m_lastMods = Input::HL_MODIFIER_NONE;
 
     friend class Desktop::View::CWLSurface;
     friend class CWorkspaceSwipeGesture;
+    friend class Pointer::CPointerManager;
 };
 
 inline UP<CInputManager> g_pInputManager;

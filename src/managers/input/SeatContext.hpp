@@ -18,6 +18,9 @@ namespace Input {
     // the ambient seat, never null: top of the context stack, else the default seat
     SP<CSeat> ambientSeat();
 
+    // the ambient seat's name, empty when no seat exists yet (early startup)
+    std::string ambientSeatName();
+
     // the logical seat a wayland client belongs to, resolved through the pid
     // seat registry at wl_seat bind time; falls back to the default seat
     SP<CSeat> seatForClient(wl_client* client);

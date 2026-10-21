@@ -68,6 +68,9 @@
 
 using namespace Hyprutils::String;
 
+// the seat a device currently belongs to, falling back to the default seat
+static SP<CSeat> ownerSeatFor(IHID* dev);
+
 CInputManager::CInputManager() {
     m_listeners.setCursorShape = PROTO::cursorShape->m_events.setShape.listen([this](const CCursorShapeProtocol::SSetShapeEvent& event) {
         if (!g_pSeatManager->m_state.pointerFocusResource)
@@ -119,6 +122,11 @@ CInputManager::CInputManager() {
 }
 
 SP<CSeat> CInputManager::seat() {
+    // the ambient seat (set by binds, IPC dispatch, submap lookups); falls
+    // back to the default seat when nothing scoped it
+    if (const auto SEAT = Input::ambientSeat(); SEAT)
+        return SEAT;
+
     return g_pSeatManager->defaultSeat();
 }
 
@@ -166,12 +174,17 @@ void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
     // dragged. a pointer-locked game would otherwise pan its camera from the drag itself.
     if (!g_layoutManager->dragController()->target())
         PROTO::relativePointer->sendRelativeMotion(sc<uint64_t>(e.timeMs) * 1000, delta, unaccel);
-    Pointer::mgr()->move(DELTA);
+    Pointer::mgr()->move(DELTA, e.device);
 
     if (PROTO::inputCapture->isCaptured())
         return;
 
-    mouseMoveUnified(e.timeMs, false, e.mouse);
+    {
+        // hover hit-testing follows the triggering device's owner seat, so
+        // independent cursors resolve surfaces and monitors independently
+        const Input::SScopedAmbientSeat SCOPE{ownerSeatFor(e.device.get())};
+        mouseMoveUnified(e.timeMs, false, e.mouse);
+    }
 
     m_lastCursorMovement.reset();
 
@@ -190,7 +203,10 @@ void CInputManager::onMouseWarp(IPointer::SMotionAbsoluteEvent e) {
 
     Pointer::mgr()->warpAbsolute(e.absolute, e.device, e.output);
 
-    mouseMoveUnified(e.timeMs, false, e.mouse);
+    {
+        const Input::SScopedAmbientSeat SCOPE{ownerSeatFor(e.device.get())};
+        mouseMoveUnified(e.timeMs, false, e.mouse);
+    }
 
     m_lastCursorMovement.reset();
 
@@ -330,7 +346,9 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     if (!pointerOnly && m_pointerConstraints.apply(time, mouseCoords))
         return;
 
-    if (!pointerOnly && PMONITOR != Desktop::focusState()->monitor() && (*PMOUSEFOCUSMON || refocus) && m_forcedFocus.expired())
+    // only default-seat passes drive the global focus monitor; foreign seats
+    // hit-test under their own cursors without dragging global state along
+    if (!pointerOnly && SEAT->isDefault() && PMONITOR != Desktop::focusState()->monitor() && (*PMOUSEFOCUSMON || refocus) && m_forcedFocus.expired())
         Desktop::focusState()->rawMonitorFocus(PMONITOR);
 
     // IME popups essentially always exist on the top - they are transient,
@@ -440,7 +458,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         g_layoutManager->moveMouse(getMouseCoordsInternal());
 
     if (g_layoutManager->dragController()->exclusiveDeviceGrab()) {
-        g_pSeatManager->setPointerFocus(nullptr, {});
+        g_pSeatManager->setPointerFocus(SEAT, nullptr, {});
         return;
     }
 
@@ -596,9 +614,37 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             m_emptyFocusCursorSet = true;
         }
 
-        g_pSeatManager->setPointerFocus(nullptr, {});
+        g_pSeatManager->setPointerFocus(SEAT, nullptr, {});
 
-        if (!pointerOnly && (refocus || !Desktop::focusState()->window())) // if we are forcing a refocus, and we don't find a surface, clear the kb focus too!
+        // this seat's cursor left every surface: it stops driving keyboard
+        // input into the previous client right away. Held keys are
+        // synthesized-released there so clients never repeat them for a
+        // user who has visibly moved on.
+        g_pSeatManager->setKeyboardFocus(SEAT, nullptr);
+
+        // P3-lite: this seat's cursor left every surface — drop its window
+        // tracking so borders stop lingering on the last touched window.
+        // Other seats keep theirs: their cursors did not move.
+        const auto PREVFOCUS = SEAT->m_focusWindow.lock();
+        const auto PREVHOVER = SEAT->m_hoverWindow.lock();
+
+        if (PREVFOCUS || PREVHOVER) {
+            SEAT->m_focusWindow.reset();
+            SEAT->m_hoverWindow.reset();
+
+            LOG(Log::INFO, "[seatmgr] clearing hover/focus for seat '{}' (prev focus {}, prev hover {})", SEAT->name(), sc<const void*>(PREVFOCUS.get()),
+                sc<const void*>(PREVHOVER.get()));
+
+            // activated stays on if another seat still holds keyboard focus
+            if (PREVFOCUS) {
+                PREVFOCUS->presentation().updateDecorations();
+                PREVFOCUS->backend().setActive(false);
+            }
+            if (PREVHOVER && PREVHOVER != PREVFOCUS)
+                PREVHOVER->presentation().updateDecorations();
+        }
+
+        if (!pointerOnly && SEAT->isDefault() && (refocus || !Desktop::focusState()->window())) // if we are forcing a refocus, and we don't find a surface, clear the kb focus too!
             Desktop::focusState()->rawWindowFocus(nullptr, FOCUS_REASON);
 
         return;
@@ -630,6 +676,60 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         m_foundLSToFocus      = pFoundLayerSurface;
         m_foundWindowToFocus  = pFoundWindow;
         m_foundSurfaceToFocus = foundSurface;
+    }
+
+    // P3-lite: non-default seats track their own keyboard and pointer focus
+    // without touching the global focus state — decorations, monitors and
+    // workspaces stay driven by the default seat until full Phase 3.
+    if (!SEAT->isDefault()) {
+        g_pSeatManager->setKeyboardFocus(SEAT, foundSurface);
+        g_pSeatManager->setPointerFocus(SEAT, foundSurface, surfaceLocal);
+
+        // refresh borders when this seat's presence or focus changes
+        const auto PREVFOCUS = SEAT->m_focusWindow.lock();
+        const auto PREVHOVER = SEAT->m_hoverWindow.lock();
+        if (PREVFOCUS != pFoundWindow || PREVHOVER != pFoundWindow) {
+            SEAT->m_focusWindow = pFoundWindow;
+            SEAT->m_hoverWindow = pFoundWindow;
+
+            LOG(Log::INFO, "[seatmgr] hover for seat '{}' -> {} (prev focus {}, prev hover {})", SEAT->name(), sc<const void*>(pFoundWindow.get()),
+                sc<const void*>(PREVFOCUS.get()), sc<const void*>(PREVHOVER.get()));
+
+            // xdg_toplevel activated is a union over seats: activate what this
+            // seat focused, deactivate what it left (the backend keeps the
+            // window activated if another seat still holds keyboard focus)
+            if (pFoundWindow) {
+                pFoundWindow->backend().setActive(true);
+                pFoundWindow->presentation().refreshValues();
+            }
+            if (PREVFOCUS && PREVFOCUS != pFoundWindow) {
+                PREVFOCUS->presentation().updateDecorations();
+                PREVFOCUS->presentation().refreshValues();
+                PREVFOCUS->backend().setActive(false);
+            }
+            if (PREVHOVER && PREVHOVER != pFoundWindow && PREVHOVER != PREVFOCUS)
+                PREVHOVER->presentation().updateDecorations();
+        }
+
+        // like the default tail: keep motion flowing so clients see hover
+        // updates (e.g. bar button highlights) while the cursor glides
+        if (!overridePos.has_value())
+            g_pSeatManager->sendPointerMotion(SEAT, time, surfaceLocal);
+
+        return;
+    }
+
+    // track the default seat's hovered window for per-seat border colors
+    if (g_pSeatManager->defaultSeat()->m_hoverWindow.lock() != pFoundWindow) {
+        const auto PREVHOVER                         = g_pSeatManager->defaultSeat()->m_hoverWindow.lock();
+        g_pSeatManager->defaultSeat()->m_hoverWindow = pFoundWindow;
+
+        LOG(Log::INFO, "[seatmgr] default hover {} -> {}", sc<const void*>(PREVHOVER.get()), sc<const void*>(pFoundWindow.get()));
+
+        if (PREVHOVER)
+            PREVHOVER->presentation().updateDecorations();
+        if (pFoundWindow)
+            pFoundWindow->presentation().updateDecorations();
     }
 
     if (g_layoutManager->dragController()->target() && (!pFoundWindow || pFoundWindow->layoutTarget() != g_layoutManager->dragController()->target())) {
@@ -735,6 +835,10 @@ void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) 
     if (info.cancelled)
         return;
 
+    // held-button state, click hit-testing and refocus resolve through the
+    // triggering device's owner seat, keeping clicks independent per seat
+    const Input::SScopedAmbientSeat SCOPE{ownerSeatFor(mouse.get())};
+
     if (e.mouse)
         recheckMouseWarpOnMouseInput();
 
@@ -752,6 +856,11 @@ void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) 
     m_lastCursorMovement.reset();
 
     if (e.state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        // remember which seat pressed, so a drag started from this press is
+        // attributed to the triggering seat (even for shared/default-seat
+        // clients like nemo-desktop whose surfaces resolve to seat0)
+        if (PROTO::data)
+            PROTO::data->notePressSeat(SEAT);
         SEAT->m_currentlyHeldButtons.emplace_back(e.button, mouse);
     } else {
         if (std::ranges::find_if(SEAT->m_currentlyHeldButtons, [&](const auto& held) { return held.button == e.button && held.pointer.lock() == mouse; }) ==
@@ -925,8 +1034,12 @@ void CInputManager::processMouseDownNormal(const IPointer::SButtonEvent& e, SP<I
     // notify app if we didn't handle it
     g_pSeatManager->sendPointerButton(e.timeMs, e.button, e.state);
 
-    if (const auto PMON = State::monitorState()->query().vec(mouseCoords).run(); PMON != Desktop::focusState()->monitor() && PMON)
-        Desktop::focusState()->rawMonitorFocus(PMON);
+    // only default-seat input drives the global focus monitor; foreign seats
+    // keep their own per-seat focus state and must not drag it along
+    if (seat()->isDefault()) {
+        if (const auto PMON = State::monitorState()->query().vec(mouseCoords).run(); PMON != Desktop::focusState()->monitor() && PMON)
+            Desktop::focusState()->rawMonitorFocus(PMON);
+    }
 
     if (g_pSeatManager->m_seatGrab && e.state == WL_POINTER_BUTTON_STATE_PRESSED) {
         m_hardInput = true;
@@ -983,6 +1096,9 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e, SP<IPointer> pointer) {
     Event::bus()->m_events.input.mouse.axis.emit(e, info);
     if (info.cancelled)
         return;
+
+    // scroll targets resolve under the triggering device's owner seat
+    const Input::SScopedAmbientSeat SCOPE{ownerSeatFor(pointer.get())};
 
     if (e.mouse)
         recheckMouseWarpOnMouseInput();
@@ -1104,7 +1220,7 @@ void CInputManager::onPointerFrame() {
 }
 
 Vector2D CInputManager::getMouseCoordsInternal() {
-    return Pointer::mgr()->position();
+    return Pointer::mgr()->position(Input::ambientSeat());
 }
 
 // libinput logical seat name, e.g. from a udev WL_SEAT tag; empty when unavailable
@@ -1121,7 +1237,6 @@ static std::string logicalSeatName(IHID* dev) {
     return name ? std::string{name} : std::string{};
 }
 
-// the seat a device currently belongs to, falling back to the default seat
 static SP<CSeat> ownerSeatFor(IHID* dev) {
     if (const auto SEAT = dev->m_seat.lock(); SEAT)
         return SEAT;
@@ -1209,6 +1324,7 @@ void CInputManager::refreshSeatAssignments() {
                 continue;
 
             changed = true;
+            LOG(Log::INFO, "[seatmgr] device '{}' moved: seat '{}' -> '{}'", DEV->m_deviceName, SEAT->name(), NEWSEAT->name());
             moveDeviceToSeat(DEV, SEAT, NEWSEAT);
         }
     }
@@ -1250,6 +1366,7 @@ void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
     const auto SEAT = assignDeviceToSeat(keeb.get());
     SEAT->m_keyboards.emplace_back(keeb);
     SEAT->m_hids.emplace_back(keeb);
+    LOG(Log::INFO, "[seatmgr] keyboard '{}' ({}) -> seat '{}'", keeb->m_deviceName, keeb->m_hlName, SEAT->name());
     keeb->m_events.destroy.listenStatic([this, keeb = keeb.get()] {
         auto PKEEB = keeb->m_self.lock();
 
@@ -1306,7 +1423,7 @@ void CInputManager::setupKeyboard(SP<IKeyboard> keeb) {
     keeb->updateLEDs();
 
     // in case m_lastFocus was set without a keyboard
-    if (seat()->m_keyboards.size() == 1 && Desktop::focusState()->surface())
+    if (ownerSeatFor(keeb.get())->m_keyboards.size() == 1 && Desktop::focusState()->surface())
         g_pSeatManager->setKeyboardFocus(Desktop::focusState()->surface());
 }
 
@@ -1434,6 +1551,7 @@ void CInputManager::setupMouse(SP<IPointer> mauz) {
     const auto SEAT = assignDeviceToSeat(mauz.get());
     SEAT->m_pointers.emplace_back(mauz);
     SEAT->m_hids.emplace_back(mauz);
+    LOG(Log::INFO, "[seatmgr] pointer '{}' ({}) -> seat '{}'", mauz->m_deviceName, mauz->m_hlName, SEAT->name());
 
     if (mauz->aq() && mauz->aq()->getLibinputHandle()) {
         const auto LIBINPUTDEV = mauz->aq()->getLibinputHandle();
@@ -1741,7 +1859,7 @@ void CInputManager::updateKeyboardsLeds(SP<IKeyboard> pKeyboard) {
     if (!leds.has_value())
         return;
 
-    for (auto const& k : seat()->m_keyboards) {
+    for (auto const& k : ownerSeatFor(pKeyboard.get())->m_keyboards) {
         k->updateLEDs(leds.value());
     }
 }
@@ -1860,8 +1978,10 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
         IME->setKeyboard(pKeyboard);
         IME->sendKey(event.timeMs, event.keycode, state);
     } else {
-        const auto SEAT     = seat();
+        const auto SEAT     = ownerSeatFor(pKeyboard.get());
         const auto CONTAINS = std::ranges::contains(SEAT->m_pressed, event.keycode);
+
+        LOG(Log::DEBUG, "[seatmgr] key {} {} via device '{}' -> seat '{}'", event.keycode, pressed ? "press" : "release", pKeyboard->m_deviceName, SEAT->name());
 
         if (CONTAINS && pressed)
             return;
@@ -1874,7 +1994,7 @@ void CInputManager::onKeyboardKey(const IKeyboard::SKeyEvent& event, SP<IKeyboar
             SEAT->m_pressed.emplace_back(event.keycode);
 
         g_pSeatManager->setKeyboard(pKeyboard);
-        g_pSeatManager->sendKeyboardKey(event.timeMs, event.keycode, state);
+        g_pSeatManager->sendKeyboardKey(SEAT, event.timeMs, event.keycode, state);
     }
 
     updateKeyboardsLeds(pKeyboard);
@@ -1892,12 +2012,13 @@ void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
     const bool USEIME            = HASIME && !DISALLOWACTION;
     auto       MODS              = pKeyboard->m_modifiersState;
     const auto DEPRESSED_MODS_HL = xkbModsToHyprland(pKeyboard, MODS.depressed);
+    const auto SEAT              = ownerSeatFor(pKeyboard.get());
 
     if (*PSENDMOD) {
         PROTO::inputCapture->modifiers(MODS.depressed, MODS.latched, MODS.locked, MODS.group);
 
         if (PROTO::inputCapture->isCaptured()) {
-            seat()->m_lastMods = shareModsFromAllKBs(pKeyboard, DEPRESSED_MODS_HL);
+            SEAT->m_lastMods = shareModsFromAllKBs(pKeyboard, DEPRESSED_MODS_HL);
             return;
         }
     }
@@ -1907,7 +2028,7 @@ void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
     if (USEIME || !HASIME) {
         const auto ALLMODS = shareModsFromAllKBs(pKeyboard, DEPRESSED_MODS_HL);
         MODS.depressed |= hyprlandModsToXkb(pKeyboard, ALLMODS);
-        seat()->m_lastMods = ALLMODS;
+        SEAT->m_lastMods = ALLMODS;
     }
 
     if (USEIME) {
@@ -1915,7 +2036,7 @@ void CInputManager::onKeyboardMod(SP<IKeyboard> pKeyboard) {
         IME->sendMods(MODS.depressed, MODS.latched, MODS.locked, MODS.group);
     } else {
         g_pSeatManager->setKeyboard(pKeyboard);
-        g_pSeatManager->sendKeyboardMods(MODS.depressed, MODS.latched, MODS.locked, MODS.group);
+        g_pSeatManager->sendKeyboardMods(SEAT, MODS.depressed, MODS.latched, MODS.locked, MODS.group);
     }
 
     updateKeyboardsLeds(pKeyboard);
@@ -2059,17 +2180,17 @@ const std::vector<uint32_t>& CInputManager::getKeysFromAllKBs() {
     return seat()->m_pressed;
 }
 
-Input::ModifierMask CInputManager::getModsFromAllKBs() {
-    return seat()->m_lastMods;
+Input::ModifierMask CInputManager::getModsFromAllKBs(IHID* ctx) {
+    return (ctx ? ownerSeatFor(ctx) : seat())->m_lastMods;
 }
 
-bool CInputManager::shareKeyFromAllKBs(uint32_t key, bool pressed) {
+bool CInputManager::shareKeyFromAllKBs(SP<IKeyboard> relative, uint32_t key, bool pressed) {
     bool finalState = pressed;
 
     if (finalState)
         return finalState;
 
-    for (auto const& kb : seat()->m_keyboards) {
+    for (auto const& kb : ownerSeatFor(relative.get())->m_keyboards) {
         if (!kb->shareStates())
             continue;
 
@@ -2087,10 +2208,10 @@ bool CInputManager::shareKeyFromAllKBs(uint32_t key, bool pressed) {
     return finalState;
 }
 
-Input::ModifierMask CInputManager::shareModsFromAllKBs(Input::ModifierMask mask) {
+Input::ModifierMask CInputManager::shareModsFromAllKBs(SP<IKeyboard> relative, Input::ModifierMask mask) {
     Input::ModifierMask finalMask = mask;
 
-    for (auto const& kb : seat()->m_keyboards) {
+    for (auto const& kb : ownerSeatFor(relative.get())->m_keyboards) {
         if (!kb->shareStates())
             continue;
 
@@ -2107,12 +2228,15 @@ Input::ModifierMask CInputManager::shareModsFromAllKBs(Input::ModifierMask mask)
 }
 
 void CInputManager::disableAllKeyboards(bool virt) {
+    // every seat: today all devices live in the default seat, so this is
+    // behavior-identical while already being seat-correct for Phase 2+
+    for (auto const& s : g_pSeatManager->seats()) {
+        for (auto const& k : s->m_keyboards) {
+            if (k->isVirtual() != virt)
+                continue;
 
-    for (auto const& k : seat()->m_keyboards) {
-        if (k->isVirtual() != virt)
-            continue;
-
-        k->m_active = false;
+            k->m_active = false;
+        }
     }
 }
 
@@ -2520,7 +2644,7 @@ void CInputManager::refocusForeignSeats() {
             continue;
 
         // quick hit-test: is the cursor actually over a surface?
-        const auto CURSOR   = Pointer::mgr()->position(); // use current position for now, will be per-seat later
+        const auto CURSOR   = Pointer::mgr()->position(s);
         const auto PMONITOR = State::monitorState()->query().vec(CURSOR).run();
         if (!PMONITOR)
             continue;
