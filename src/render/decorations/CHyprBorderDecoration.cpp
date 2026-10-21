@@ -3,15 +3,20 @@
 #include "../../desktop/view/window/WindowPresentation.hpp"
 #include "../../Compositor.hpp"
 #include "../../config/ConfigValue.hpp"
+#include "../../config/shared/parserUtils/ParserUtils.hpp"
 #include "../../desktop/state/FocusState.hpp"
 #include "../../desktop/state/WindowState.hpp"
 #include "../../desktop/view/Group.hpp"
 #include "../../managers/eventLoop/EventLoopManager.hpp"
 #include "../../managers/fullscreen/FullscreenController.hpp"
+#include "../../managers/SeatManager.hpp"
 #include "../pass/BorderPassElement.hpp"
 #include "../Renderer.hpp"
 #include "../WindowRenderPresentation.hpp"
 #include "../../state/MonitorState.hpp"
+
+#include <hyprutils/string/VarList.hpp>
+#include "../../debug/log/Logger.hpp"
 
 CHyprBorderDecoration::CHyprBorderDecoration(PHLWINDOW pWindow) :
     IHyprWindowDecoration(pWindow), m_window(pWindow), m_gradient(Config::CGradientValueData{CHyprColor(sc<uint64_t>(0))}) {
@@ -160,6 +165,7 @@ void CHyprBorderDecoration::initializeAnimations() {
 
 void CHyprBorderDecoration::updateState() {
     static auto PACTIVECOL              = CConfigValue<Config::IComplexConfigValue>("general:col.active_border");
+    static auto PFOREIGNACTIVECOL       = CConfigValue<Config::IComplexConfigValue>("general:col.active_border_foreign");
     static auto PINACTIVECOL            = CConfigValue<Config::IComplexConfigValue>("general:col.inactive_border");
     static auto PNOGROUPACTIVECOL       = CConfigValue<Config::IComplexConfigValue>("general:col.nogroup_border_active");
     static auto PNOGROUPINACTIVECOL     = CConfigValue<Config::IComplexConfigValue>("general:col.nogroup_border");
@@ -176,6 +182,7 @@ void CHyprBorderDecoration::updateState() {
 
     auto* const ACTIVECOL              = sc<Config::CGradientValueData*>(PACTIVECOL.ptr());
     auto* const INACTIVECOL            = sc<Config::CGradientValueData*>(PINACTIVECOL.ptr());
+    auto* const FOREIGNACTIVECOL       = sc<Config::CGradientValueData*>(PFOREIGNACTIVECOL.ptr());
     auto* const NOGROUPACTIVECOL       = sc<Config::CGradientValueData*>(PNOGROUPACTIVECOL.ptr());
     auto* const NOGROUPINACTIVECOL     = sc<Config::CGradientValueData*>(PNOGROUPINACTIVECOL.ptr());
     auto* const GROUPACTIVECOL         = sc<Config::CGradientValueData*>(PGROUPACTIVECOL.ptr());
@@ -184,8 +191,71 @@ void CHyprBorderDecoration::updateState() {
     auto* const GROUPINACTIVELOCKEDCOL = sc<Config::CGradientValueData*>(PGROUPINACTIVELOCKEDCOL.ptr());
 
     const bool GROUPLOCKED = PWINDOW->grouping().group() ? PWINDOW->grouping().group()->locked() || Desktop::windowState()->groupsLocked() : Desktop::windowState()->groupsLocked();
-    if (PWINDOW == Desktop::focusState()->window()) {
+
+    // P3-lite: gather one border-color contribution per seat currently on
+    // this window (cursor hovering it or keyboard-focused on it); several
+    // seats at once mix into a single multi-stop gradient.
+    std::vector<const Config::CGradientValueData*> CONTRIBUTORS;
+    std::vector<Config::CGradientValueData>        foreignTemps;
+
+    static auto                                    PSEATCOLORS = CConfigValue<Config::STRING>("general:col.seat_active_borders");
+
+    std::vector<CHyprColor>                        SEATCOLORLIST;
+    {
+        Hyprutils::String::CVarList tokens(*PSEATCOLORS, 0, 's', true);
+        for (auto const& t : tokens) {
+            if (auto COL = Config::ParserUtils::parseColor(t))
+                SEATCOLORLIST.emplace_back(sc<uint64_t>(*COL));
+        }
+    }
+
+    const auto DEFAULTSEAT     = g_pSeatManager->defaultSeat();
+    const bool DEFAULTONWINDOW = PWINDOW == Desktop::focusState()->window() || (DEFAULTSEAT && PWINDOW == DEFAULTSEAT->m_hoverWindow.lock());
+
+    // reserve up front: the contributor pointers below point into foreignTemps
+    foreignTemps.reserve(g_pSeatManager->seats().size());
+
+    size_t foreignIdx         = 0;
+    bool   foreignContributed = false;
+    for (auto const& s : g_pSeatManager->seats()) {
+        if (!s || s->isDefault())
+            continue;
+
+        if (s->m_hoverWindow.lock() == PWINDOW || s->m_focusWindow.lock() == PWINDOW) {
+            if (foreignIdx < SEATCOLORLIST.size())
+                foreignTemps.emplace_back(SEATCOLORLIST[foreignIdx]);
+            else
+                foreignTemps.emplace_back(*FOREIGNACTIVECOL);
+            CONTRIBUTORS.emplace_back(&foreignTemps.back());
+            foreignContributed = true;
+        }
+
+        ++foreignIdx;
+    }
+
+    LOG(Log::DEBUG, "[seatmgr] border {}: defaultOnWindow={} foreignContributed={} contributors={}", sc<const void*>(PWINDOW.get()), DEFAULTONWINDOW, foreignContributed,
+        CONTRIBUTORS.size());
+
+    if (CONTRIBUTORS.size() >= 2) {
+        std::vector<CHyprColor> cols;
+        const float             ANG = CONTRIBUTORS.front()->m_angle;
+        for (auto const* c : CONTRIBUTORS)
+            cols.insert(cols.end(), c->m_colors.begin(), c->m_colors.end());
+
+        const Config::CGradientValueData MERGED{std::move(cols), ANG};
+        m_gradient.setTarget(MERGED);
+        return;
+    }
+
+    if (DEFAULTONWINDOW) {
         const auto* const ACTIVECOLOR = !PWINDOW->grouping().group() ? (!(PWINDOW->grouping().rules() & Desktop::View::GROUP_DENY) ? ACTIVECOL : NOGROUPACTIVECOL) :
+                                                                       (GROUPLOCKED ? GROUPACTIVELOCKEDCOL : GROUPACTIVECOL);
+        m_gradient.setTarget(PWINDOW->m_ruleApplicator->activeBorderColor().valueOr(*ACTIVECOLOR));
+        return;
+    }
+
+    if (foreignContributed) {
+        const auto* const ACTIVECOLOR = !PWINDOW->grouping().group() ? (!(PWINDOW->grouping().rules() & Desktop::View::GROUP_DENY) ? FOREIGNACTIVECOL : NOGROUPACTIVECOL) :
                                                                        (GROUPLOCKED ? GROUPACTIVELOCKEDCOL : GROUPACTIVECOL);
         m_gradient.setTarget(PWINDOW->m_ruleApplicator->activeBorderColor().valueOr(*ACTIVECOLOR));
         return;

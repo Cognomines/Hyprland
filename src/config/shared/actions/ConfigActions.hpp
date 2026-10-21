@@ -3,6 +3,7 @@
 #include <expected>
 #include <string>
 #include <optional>
+#include <unordered_map>
 
 #include "../../../desktop/DesktopTypes.hpp"
 #include "../../../workspace/HLWorkspace.hpp"
@@ -122,7 +123,13 @@ namespace Config::Actions {
         uint32_t    m_lastMouseCode       = 0;  // last mouse button code, 0 if last was keyboard
         uint32_t    m_timeLastMs          = 0;  // timestamp of last key/mouse event
         std::string m_currentSubmap       = ""; // current keybind submap name
+        // active submap per logical seat (seat name -> submap)
+        std::unordered_map<std::string, std::string> m_submaps;
     };
 
     UP<CActionState>& state();
+
+    // submap state for a seat; empty string = root submap
+    const std::string& currentSubmapFor(const std::string& seatName);
+    void               setCurrentSubmapFor(const std::string& seatName, const std::string& submap);
 };

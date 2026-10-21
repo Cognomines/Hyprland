@@ -7,6 +7,8 @@
 #include "../../protocols/LayerShell.hpp"
 #include "../../protocols/core/Compositor.hpp"
 #include "../../managers/SeatManager.hpp"
+#include "../../managers/input/SeatContext.hpp"
+#include "../../pointer/PointerManager.hpp"
 #include "../../animation/AnimationManager.hpp"
 #include "../../render/Renderer.hpp"
 #include "../../config/shared/animation/AnimationTree.hpp"
@@ -17,6 +19,7 @@
 #include "../../managers/fullscreen/FullscreenController.hpp"
 #include "../../event/EventBus.hpp"
 #include "../../state/MonitorState.hpp"
+#include "../state/ViewState.hpp"
 #include "popup/WaylandPopupBackend.hpp"
 #include "Popup.hpp"
 
@@ -27,6 +30,23 @@ PHLLS CLayerSurface::create(SP<CLayerShellResource> resource) {
     PHLLS pLS = SP<CLayerSurface>(new CLayerSurface(resource));
 
     auto  pMonitor = resource->m_monitor.empty() ? Desktop::focusState()->monitor() : State::monitorState()->query().name(resource->m_monitor).run();
+
+    // logical seats: a layer surface mapped by a foreign-seat client (rofi,
+    // launcher menus) belongs on that seat's screen, not on the default
+    // seat's focus monitor. Resolution mirrors mapWindow: the spawning
+    // seat, or the seat that last clicked/typed into a default-seat client.
+    // An output the client picked explicitly is overridden too: layer
+    // clients are seat-unaware and would keep the default seat's screen.
+    const auto SURF = resource->m_surface.lock();
+    if (SURF) {
+        auto SEAT = Input::seatForSurfacePlacement(Input::seatForClient(SURF->client()), SURF->client());
+        if (SEAT && !SEAT->isDefault()) {
+            if (auto SEATMONITOR = Input::seatTargetMonitor(SEAT)) {
+                LOG(Log::INFO, "[seatmgr] layer surface '{}' spawned by seat '{}', placing on monitor {}", resource->m_layerNamespace, SEAT->name(), SEATMONITOR->m_name);
+                pMonitor = SEATMONITOR;
+            }
+        }
+    }
 
     pLS->m_wlSurface->assign(resource->m_surface.lock(), pLS);
 
@@ -297,6 +317,35 @@ void CLayerSurface::onUnmap() {
     } else if (Desktop::focusState()->surface() && Desktop::focusState()->surface() != m_wlSurface->resource())
         g_pSeatManager->setKeyboardFocus(Desktop::focusState()->surface());
 
+    // logical seats: refocus any foreign seat keyboard-focused on this LS,
+    // mirroring the per-seat window focus-on-close path. Candidates come
+    // from the seat's cursor monitor only (no layout candidate here).
+    const auto LS_SURF = m_wlSurface->resource();
+    for (auto const& s : g_pSeatManager->seats()) {
+        if (!s || s->isDefault() || s->m_keyboardFocus.lock() != LS_SURF)
+            continue;
+
+        const auto SEAT_CURSOR_POS = Pointer::mgr()->position(s);
+        const auto SEAT_MONITOR    = State::monitorState()->query().vec(SEAT_CURSOR_POS).run();
+
+        PHLWINDOW  seatCandidate = nullptr;
+        if (SEAT_MONITOR) {
+            seatCandidate =
+                Desktop::viewState()->hitTest().windowAt(SEAT_CURSOR_POS, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+            // only focus windows on the same monitor as the seat's cursor
+            if (seatCandidate && seatCandidate->m_monitor.lock() != SEAT_MONITOR)
+                seatCandidate = nullptr;
+        }
+
+        if (seatCandidate) {
+            LOG(Log::INFO, "[seatmgr] seat '{}' loses focused layer surface, refocusing window {:mw}", s->name(), seatCandidate);
+            g_pSeatManager->setKeyboardFocus(s, seatCandidate->wlSurface()->resource());
+        } else {
+            LOG(Log::INFO, "[seatmgr] seat '{}' loses focused layer surface, clearing focus", s->name());
+            g_pSeatManager->setKeyboardFocus(s, nullptr);
+        }
+    }
+
     CBox geomFixed = {m_geometry.x + PMONITOR->m_position.x, m_geometry.y + PMONITOR->m_position.y, m_geometry.width, m_geometry.height};
     g_pHyprRenderer->damageBox(geomFixed);
 
@@ -442,7 +491,17 @@ void CLayerSurface::onCommit() {
 
 void CLayerSurface::takeKeyboardFocus() {
     g_pInputManager->releaseAllMouseButtons();
-    Desktop::focusState()->rawSurfaceFocus(m_wlSurface->resource());
+
+    // logical seats: a keyboard-grabbing layer surface (rofi, menus) takes
+    // the keyboard of the seat that spawned/interacted with its client, so
+    // it wins over xdg-toplevels there; the default seat keeps the global
+    // focus path
+    const auto SURF = m_wlSurface->resource();
+    if (const auto SEAT = Input::seatForSurfacePlacement(Input::seatForClient(SURF->client()), SURF->client()); SEAT && !SEAT->isDefault()) {
+        LOG(Log::INFO, "[seatmgr] layer surface '{}' grabs keyboard of seat '{}'", m_namespace, SEAT->name());
+        g_pSeatManager->setKeyboardFocus(SEAT, SURF);
+    } else
+        Desktop::focusState()->rawSurfaceFocus(SURF);
 
     // Release the old pointer focus so native constraints and confine_pointer rules cannot
     // prevent the subsequent mouse movement from hit-testing the layer.

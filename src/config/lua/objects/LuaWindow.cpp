@@ -242,7 +242,7 @@ static int windowIndex(lua_State* L) {
             }
         }
     } else if (key == "active") {
-        lua_pushboolean(L, w == Desktop::focusState()->window());
+        lua_pushboolean(L, w == Desktop::focusState()->activeWindow());
     } else if (key == "tearing_hint") {
         lua_pushboolean(L, sc<bool>(w->m_hints & Desktop::View::WINDOW_HINT_TEAR));
     } else

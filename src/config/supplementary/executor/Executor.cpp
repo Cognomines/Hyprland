@@ -3,6 +3,8 @@
 #include "../../../event/EventBus.hpp"
 #include "../../../Compositor.hpp"
 #include "../../../managers/input/InputManager.hpp"
+#include "../../../managers/input/PidSeatRegistry.hpp"
+#include "../../../managers/input/SeatContext.hpp"
 #include "../../../desktop/rule/windowRule/WindowRule.hpp"
 #include "../../../desktop/rule/Engine.hpp"
 #include "../../../desktop/state/FocusState.hpp"
@@ -191,6 +193,11 @@ std::optional<uint64_t> CExecutor::spawnRawProc(const std::string& args, PHLWORK
         for (auto const& e : HLENV) {
             setenv(e.first.c_str(), e.second.c_str(), 1);
         }
+        // logical seats: tag the spawn so descendants that outlive the pid
+        // registry chain (re-parented launchers, dbus activation) still
+        // resolve to their spawning seat
+        if (const auto SEAT = Input::ambientSeat(); SEAT && !SEAT->isDefault())
+            setenv("HYPRLAND_LOGICAL_SEAT", SEAT->name().c_str(), 1);
         setenv("WAYLAND_DISPLAY", g_pCompositor->m_wlDisplaySocket.c_str(), 1);
         if (!execRuleToken.empty())
             setenv(Desktop::Rule::EXEC_RULE_ENV_NAME, execRuleToken.c_str(), true);
@@ -210,6 +217,10 @@ std::optional<uint64_t> CExecutor::spawnRawProc(const std::string& args, PHLWORK
     // run in parent
 
     LOG(Log::DEBUG, "[executor] Process created with pid {}", child);
+
+    // remember which logical seat spawned this process, for wl_seat bind resolution
+    if (const auto SEAT = Input::ambientSeat(); SEAT)
+        Input::pidSeatRegistry()->associate(child, SEAT->name());
 
     return child;
 }

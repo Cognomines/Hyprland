@@ -9,6 +9,8 @@
 #include "../../../protocols/core/Compositor.hpp"
 #include "managers/fullscreen/FullscreenController.hpp"
 #include "managers/fullscreen/FullscreenTypes.hpp"
+#include "../../../managers/SeatManager.hpp"
+#include "../../../debug/log/Logger.hpp"
 
 using namespace Desktop::View;
 
@@ -326,8 +328,18 @@ void CWaylandBackend::acknowledgeConfigure(const CBox& clientBox) {
 
 void CWaylandBackend::setActive(bool active) {
     const auto RESOURCE = m_resource.lock();
-    if (RESOURCE && RESOURCE->m_toplevel)
-        RESOURCE->m_toplevel->setActive(active);
+    if (!RESOURCE || !RESOURCE->m_toplevel)
+        return;
+
+    // logical seats: keep a window activated while ANY seat holds keyboard
+    // focus on it, even when the global focus moved elsewhere
+    if (!active && g_pSeatManager && g_pSeatManager->isWindowKeyboardFocusedAnywhere(m_window.lock())) {
+        LOG(Log::INFO, "[seatmgr] keeping toplevel activated: another seat holds keyboard focus");
+        return;
+    }
+
+    LOG(Log::DEBUG, "[seatmgr] toplevel {} activated={}", sc<const void*>(m_window.lock().get()), active);
+    RESOURCE->m_toplevel->setActive(active);
 }
 
 void CWaylandBackend::setFullscreen(bool fullscreen) {

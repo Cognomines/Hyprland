@@ -29,7 +29,7 @@ namespace Input {
         // is unnecessary since over-forking beyond this is degenerate.
         constexpr int PidAncestorWalkLimit = 32;
 
-        pid_t ppidOf(pid_t pid) {
+        pid_t         ppidOf(pid_t pid) {
             if (pid <= 1)
                 return 0;
 
@@ -65,8 +65,8 @@ namespace Input {
             // full entry, so match at entry boundaries
             std::string buf{std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
             for (size_t pos = 0; pos < buf.size();) {
-                const size_t       end   = buf.find('\0', pos);
-                const size_t       len   = (end == std::string::npos ? buf.size() : end) - pos;
+                const size_t           end = buf.find('\0', pos);
+                const size_t           len = (end == std::string::npos ? buf.size() : end) - pos;
                 const std::string_view entry{buf.data() + pos, len};
                 if (entry.starts_with(SEAT_ENV_MARKER))
                     return std::string{entry.substr(SEAT_ENV_MARKER.size())};
@@ -88,6 +88,11 @@ namespace Input {
             return nullptr;
 
         return g_pSeatManager->defaultSeat();
+    }
+
+    std::string ambientSeatName() {
+        const auto SEAT = ambientSeat();
+        return SEAT ? SEAT->name() : std::string{};
     }
 
     SScopedAmbientSeat::SScopedAmbientSeat(SP<CSeat> seat) {
@@ -123,7 +128,7 @@ namespace Input {
             return g_pSeatManager->defaultSeat();
         }
 
-            LOG(Log::DEBUG, "[seatmgr] seatForPid pid {} -> no registry entry in {} process(es), default", pid, examined);
+        LOG(Log::DEBUG, "[seatmgr] seatForPid pid {} -> no registry entry in {} process(es), default", pid, examined);
 
         // the process tree gave nothing: the spawn marker survives even a
         // broken ancestry (re-parented launchers), so try the environment
