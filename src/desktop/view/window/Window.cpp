@@ -1649,7 +1649,7 @@ void CWindow::unmapWindow() {
     // keyboard focus *before* unmap listeners can destroy the surface resource
     std::vector<SP<CSeat>> AFFECTED_SEATS;
     const auto             CLOSING_SURFACE = wlSurface()->resource();
-    for (auto const& s : g_pSeatManager->seats()) {
+    for (auto const& s : SeatManager::seats()) {
         if (!s || s->isDefault())
             continue;
         if (s->m_keyboardFocus.lock() == CLOSING_SURFACE)

@@ -127,13 +127,13 @@ SP<CSeat> CInputManager::seat() {
     if (const auto SEAT = Input::ambientSeat(); SEAT)
         return SEAT;
 
-    return g_pSeatManager->defaultSeat();
+    return SeatManager::defaultSeat();
 }
 
 CInputManager::~CInputManager() {
     m_constraints.clear();
     if (g_pSeatManager) {
-        for (auto const& s : g_pSeatManager->seats()) {
+        for (auto const& s : SeatManager::seats()) {
             s->m_keyboards.clear();
             s->m_pointers.clear();
             s->m_touches.clear();
@@ -720,9 +720,9 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     }
 
     // track the default seat's hovered window for per-seat border colors
-    if (g_pSeatManager->defaultSeat()->m_hoverWindow.lock() != pFoundWindow) {
-        const auto PREVHOVER                         = g_pSeatManager->defaultSeat()->m_hoverWindow.lock();
-        g_pSeatManager->defaultSeat()->m_hoverWindow = pFoundWindow;
+    if (const auto DEFAULTSEAT = SeatManager::defaultSeat(); DEFAULTSEAT && DEFAULTSEAT->m_hoverWindow.lock() != pFoundWindow) {
+        const auto PREVHOVER       = DEFAULTSEAT->m_hoverWindow.lock();
+        DEFAULTSEAT->m_hoverWindow = pFoundWindow;
 
         LOG(Log::INFO, "[seatmgr] default hover {} -> {}", sc<const void*>(PREVHOVER.get()), sc<const void*>(pFoundWindow.get()));
 
@@ -1241,7 +1241,7 @@ static SP<CSeat> ownerSeatFor(IHID* dev) {
     if (const auto SEAT = dev->m_seat.lock(); SEAT)
         return SEAT;
 
-    return g_pSeatManager->defaultSeat();
+    return SeatManager::defaultSeat();
 }
 
 template <typename T>
@@ -1313,7 +1313,7 @@ SP<CSeat> CInputManager::assignDeviceToSeat(IHID* dev) {
 void CInputManager::refreshSeatAssignments() {
     bool changed = false;
 
-    for (const auto& SEAT : g_pSeatManager->seats()) {
+    for (const auto& SEAT : SeatManager::seats()) {
         for (const auto& HID : SEAT->m_hids) {
             auto DEV = HID.lock();
             if (!DEV || DEV->getType() == HID_TYPE_UNKNOWN)
@@ -1755,14 +1755,14 @@ void CInputManager::setPointerConfigs() {
 }
 
 static void removeFromHIDs(WP<IHID> hid) {
-    for (auto const& s : g_pSeatManager->seats()) {
+    for (auto const& s : SeatManager::seats()) {
         std::erase_if(s->m_hids, [hid](const auto& e) { return e.expired() || e == hid; });
     }
     g_pInputManager->updateCapabilities();
 }
 
 bool CInputManager::anyHidHasCap(eHIDCapabilityType type) {
-    return std::ranges::any_of(g_pSeatManager->seats(),
+    return std::ranges::any_of(SeatManager::seats(),
                                [&type](const auto& s) { return std::ranges::any_of(s->m_hids, [&type](const auto& hid) { return hid && (hid->getCapabilities() & type) != 0; }); });
 }
 
@@ -2159,7 +2159,7 @@ bool CInputManager::hasHeldButtons() {
 void CInputManager::updateCapabilities() {
     uint32_t caps = 0;
 
-    for (auto const& s : g_pSeatManager->seats()) {
+    for (auto const& s : SeatManager::seats()) {
         uint32_t seatCaps = 0;
 
         for (auto const& h : s->m_hids) {
@@ -2230,7 +2230,7 @@ Input::ModifierMask CInputManager::shareModsFromAllKBs(SP<IKeyboard> relative, I
 void CInputManager::disableAllKeyboards(bool virt) {
     // every seat: today all devices live in the default seat, so this is
     // behavior-identical while already being seat-correct for Phase 2+
-    for (auto const& s : g_pSeatManager->seats()) {
+    for (auto const& s : SeatManager::seats()) {
         for (auto const& k : s->m_keyboards) {
             if (k->isVirtual() != virt)
                 continue;
@@ -2432,7 +2432,7 @@ std::string CInputManager::getNameForNewDevice(std::string internalName) {
     };
 
     auto nameTaken = [&]() {
-        for (auto const& s : g_pSeatManager->seats()) {
+        for (auto const& s : SeatManager::seats()) {
             if (std::ranges::find_if(s->m_hids, [&](const auto& other) { return other->m_hlName == makeNewName(); }) != s->m_hids.end())
                 return true;
         }
@@ -2637,7 +2637,7 @@ void CInputManager::refocusForeignSeats() {
     // surface), skip the seat entirely — running the full unified pass
     // would hit the empty-hit path and *clear* keyboard focus, which is
     // wrong for a seat that spawned a client and is stationary.
-    for (auto const& s : g_pSeatManager->seats()) {
+    for (auto const& s : SeatManager::seats()) {
         if (!s || s->isDefault())
             continue;
         if (!s->hasLiveDevices() || s->m_pointers.empty())

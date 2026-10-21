@@ -503,7 +503,7 @@ Vector2D& CPointerManager::posRefFor(SP<CSeat> seat) {
 }
 
 bool CPointerManager::hasForeignCursors() const {
-    for (auto const& s : g_pSeatManager->seats()) {
+    for (auto const& s : SeatManager::seats()) {
         if (!s->isDefault() && s->m_cursorActive && s->hasLiveDevices())
             return true;
     }
@@ -852,7 +852,7 @@ void CPointerManager::renderSoftwareCursorsFor(Render::CRenderContext& ctx, PHLM
     }
 
     // P4-lite: draw every other active seat's cursor with the same image
-    for (auto const& s : g_pSeatManager->seats()) {
+    for (auto const& s : SeatManager::seats()) {
         if (s->isDefault() || !s->m_cursorActive || !s->hasLiveDevices())
             continue;
 

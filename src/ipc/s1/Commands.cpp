@@ -979,7 +979,7 @@ static std::string devicesRequest(eHyprCtlOutputFormat format, std::string reque
         result += "\n\nSeat cursors:\n";
         result += std::format("\t{}: ({:.1f}, {:.1f})\n", g_pInputManager->seat()->name(), Pointer::mgr()->position(g_pInputManager->seat()).x,
                               Pointer::mgr()->position(g_pInputManager->seat()).y);
-        for (auto const& s : g_pSeatManager->seats()) {
+        for (auto const& s : SeatManager::seats()) {
             if (s->isDefault())
                 continue;
             result += std::format("\t{}: ({:.1f}, {:.1f}){}\n", s->name(), s->m_cursorPos.x, s->m_cursorPos.y, s->hasLiveDevices() ? "" : " (no devices)");

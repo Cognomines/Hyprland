@@ -10,8 +10,8 @@
 #include "input/Seat.hpp"
 #include <vector>
 
-constexpr size_t MAX_SERIAL_STORE_LEN      = 100;
-constexpr size_t MAX_CLIENT_INTERACTIONS   = 128;
+constexpr size_t MAX_SERIAL_STORE_LEN    = 100;
+constexpr size_t MAX_CLIENT_INTERACTIONS = 128;
 
 class CWLSurfaceResource;
 class CWLSeatResource;
@@ -77,7 +77,7 @@ class CSeatManager {
   public:
     CSeatManager();
 
-SP<CSeat>               defaultSeat();
+    SP<CSeat>               defaultSeat();
     std::vector<SP<CSeat>>& seats();
     SP<CSeat>               seatByName(const std::string& name);
     // looks up a seat by name, creating an implicit seat if missing.
@@ -93,16 +93,16 @@ SP<CSeat>               defaultSeat();
     // P3-lite: seat-scoped focus and event delivery. The unscoped variants
     // resolve SP<CSeat> through Input::ambientSeat(); the default seat's
     // state remains CSeatManager::m_state, other seats use CSeat fields.
-    void setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf);
-    void sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key, wl_keyboard_key_state state);
-    void sendKeyboardMods(SP<CSeat> seat, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group);
+    void                       setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf);
+    void                       sendKeyboardKey(SP<CSeat> seat, uint32_t timeMs, uint32_t key, wl_keyboard_key_state state);
+    void                       sendKeyboardMods(SP<CSeat> seat, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group);
 
-CKeyboardEventHandlerStack m_keyboardEventHandlers;
+    CKeyboardEventHandlerStack m_keyboardEventHandlers;
 
-    void setPointerFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf, const Vector2D& local);
-    void sendPointerMotion(SP<CSeat> seat, uint32_t timeMs, const Vector2D& local);
-    void sendPointerButton(SP<CSeat> seat, uint32_t timeMs, uint32_t key, wl_pointer_button_state state);
-    void sendPointerFrame(SP<CSeat> seat);
+    void                       setPointerFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf, const Vector2D& local);
+    void                       sendPointerMotion(SP<CSeat> seat, uint32_t timeMs, const Vector2D& local);
+    void                       sendPointerButton(SP<CSeat> seat, uint32_t timeMs, uint32_t key, wl_pointer_button_state state);
+    void                       sendPointerFrame(SP<CSeat> seat);
     void sendPointerAxis(SP<CSeat> seat, uint32_t timeMs, wl_pointer_axis axis, double value, int32_t discrete, int32_t value120, wl_pointer_axis_source source,
                          wl_pointer_axis_relative_direction relative);
 
@@ -237,9 +237,9 @@ CKeyboardEventHandlerStack m_keyboardEventHandlers;
         wl_client*  client = nullptr;
         std::string seatName;
     };
-    std::vector<SClientInteraction>         m_clientInteractions;
+    std::vector<SClientInteraction> m_clientInteractions;
 
-    void                                    refocusGrab();
+    void                            refocusGrab();
 
     struct {
         CHyprSignalListener newSeatResource;
@@ -256,3 +256,12 @@ CKeyboardEventHandlerStack m_keyboardEventHandlers;
 };
 
 inline UP<CSeatManager> g_pSeatManager;
+
+namespace SeatManager {
+    // Null-safe seat access. The seat manager is created during compositor
+    // init, so it is absent in the unit-test environment and during early
+    // startup: seat lookups there must degrade to "no seat" instead of
+    // dereferencing a null manager.
+    std::vector<SP<CSeat>>& seats();
+    SP<CSeat>               defaultSeat();
+}
