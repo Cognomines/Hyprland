@@ -1239,7 +1239,7 @@ static int hlSeat(lua_State* L) {
 
         const std::string key = lua_tostring(L, -2);
 
-        const auto listIt = std::ranges::find_if(SEAT_LISTS, [&key](const auto& p) { return key == p.first; });
+        const auto        listIt = std::ranges::find_if(SEAT_LISTS, [&key](const auto& p) { return key == p.first; });
         if (listIt == SEAT_LISTS.end()) {
             self->addError(std::format("{}: hl.seat: unknown field '{}'", sourceInfo, key));
             lua_pop(L, 1);

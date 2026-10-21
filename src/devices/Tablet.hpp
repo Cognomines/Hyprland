@@ -22,9 +22,9 @@ class CTablet : public IHID {
     static SP<CTablet> create(SP<Aquamarine::ITablet> tablet);
     ~CTablet();
 
-    virtual uint32_t        getCapabilities();
-    virtual eHIDType        getType();
-    SP<Aquamarine::ITablet> aq();
+    virtual uint32_t         getCapabilities();
+    virtual eHIDType         getType();
+    SP<Aquamarine::ITablet>  aq();
     virtual libinput_device* libinputHandle() const override;
 
     enum eTabletToolAxes : uint16_t {

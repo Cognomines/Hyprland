@@ -32,19 +32,19 @@ enum eHIDType : uint8_t {
     This could be a keyboard, a mouse, or a touchscreen.
 */
 struct SDeviceIdentity {
-    std::string name;      // kernel-reported device name
+    std::string name; // kernel-reported device name
     uint16_t    vendor  = 0;
     uint16_t    product = 0;
-    std::string idPath;    // stable physical port chain (udev ID_PATH or evdev phys)
-    std::string serial;    // unit serial if reported, else empty
+    std::string idPath; // stable physical port chain (udev ID_PATH or evdev phys)
+    std::string serial; // unit serial if reported, else empty
 };
 
 class IHID {
   public:
     virtual ~IHID() = default;
 
-    virtual uint32_t        getCapabilities() = 0;
-    virtual eHIDType        getType();
+    virtual uint32_t         getCapabilities() = 0;
+    virtual eHIDType         getType();
     virtual libinput_device* libinputHandle() const;
 
     // fills m_identity from the kernel via the libinput handle; no-op for virtual devices
