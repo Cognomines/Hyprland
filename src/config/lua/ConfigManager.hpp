@@ -56,54 +56,54 @@ namespace Config::Lua {
         CConfigManager();
         virtual ~CConfigManager() override;
 
-        virtual eConfigManagerType               type() override;
+        virtual eConfigManagerType                                          type() override;
 
-        virtual void                             init() override;
-        virtual void                             reload() override;
-        virtual std::string                      verify() override;
+        virtual void                                                        init() override;
+        virtual void                                                        reload() override;
+        virtual std::string                                                 verify() override;
 
-        virtual int                              getDeviceInt(const std::string&, const std::string&, const std::string& fallback = "") override;
-        virtual float                            getDeviceFloat(const std::string&, const std::string&, const std::string& fallback = "") override;
-        virtual Vector2D                         getDeviceVec(const std::string&, const std::string&, const std::string& fallback = "") override;
-        virtual std::string                      getDeviceString(const std::string&, const std::string&, const std::string& fallback = "") override;
-        virtual bool                             deviceConfigExplicitlySet(const std::string&, const std::string&) override;
-        virtual bool                             deviceConfigExists(const std::string&) override;
+        virtual int                                                         getDeviceInt(const std::string&, const std::string&, const std::string& fallback = "") override;
+        virtual float                                                       getDeviceFloat(const std::string&, const std::string&, const std::string& fallback = "") override;
+        virtual Vector2D                                                    getDeviceVec(const std::string&, const std::string&, const std::string& fallback = "") override;
+        virtual std::string                                                 getDeviceString(const std::string&, const std::string&, const std::string& fallback = "") override;
+        virtual bool                                                        deviceConfigExplicitlySet(const std::string&, const std::string&) override;
+        virtual bool                                                        deviceConfigExists(const std::string&) override;
 
         virtual const std::unordered_map<std::string, Config::SSeatConfig>& seatConfigs() override;
 
-        virtual SConfigOptionReply               getConfigValue(const std::string&) override;
+        virtual SConfigOptionReply                                          getConfigValue(const std::string&) override;
 
-        virtual std::string                      getMainConfigPath() override;
-        virtual std::string                      getErrors() override;
-        virtual std::string                      getConfigString() override;
-        virtual std::string                      currentConfigPath() override;
-        virtual const std::vector<std::string>&  getConfigPaths() override;
+        virtual std::string                                                 getMainConfigPath() override;
+        virtual std::string                                                 getErrors() override;
+        virtual std::string                                                 getConfigString() override;
+        virtual std::string                                                 currentConfigPath() override;
+        virtual const std::vector<std::string>&                             getConfigPaths() override;
 
-        virtual std::expected<void, std::string> generateDefaultConfig(const std::filesystem::path&, bool safeMode) override;
+        virtual std::expected<void, std::string>                            generateDefaultConfig(const std::filesystem::path&, bool safeMode) override;
 
-        virtual void                             handlePluginLoads() override;
-        virtual bool                             configLoaded() override;
-        virtual bool                             configVerifPassed() override;
+        virtual void                                                        handlePluginLoads() override;
+        virtual bool                                                        configLoaded() override;
+        virtual bool                                                        configVerifPassed() override;
 
-        virtual std::expected<void, std::string> registerPluginValue(void* handle, SP<Config::Values::IValue> value) override;
-        virtual void                             onPluginUnload(void* handle) override;
+        virtual std::expected<void, std::string>                            registerPluginValue(void* handle, SP<Config::Values::IValue> value) override;
+        virtual void                                                        onPluginUnload(void* handle) override;
 
-        virtual void                             warnDeprecated(std::string what, std::string why) override;
-        virtual void                             clearDeprecations() override;
-        virtual std::vector<std::string>         deprecationNotices() const override;
+        virtual void                                                        warnDeprecated(std::string what, std::string why) override;
+        virtual void                                                        clearDeprecations() override;
+        virtual std::vector<std::string>                                    deprecationNotices() const override;
 
-        int                                      invokePluginLuaFunctionByID(uint64_t id, lua_State* L);
+        int                                                                 invokePluginLuaFunctionByID(uint64_t id, lua_State* L);
 
-        std::expected<void, std::string>         registerPluginLuaFunction(void* handle, const std::string& namespace_, const std::string& name, PLUGIN_LUA_FN fn);
-        std::expected<void, std::string>         unregisterPluginLuaFunction(void* handle, const std::string& namespace_, const std::string& name);
+        std::expected<void, std::string> registerPluginLuaFunction(void* handle, const std::string& namespace_, const std::string& name, PLUGIN_LUA_FN fn);
+        std::expected<void, std::string> unregisterPluginLuaFunction(void* handle, const std::string& namespace_, const std::string& name);
 
-        void                                     addError(std::string&& str);
-        void                                     addEvalIssue(const Config::SConfigError& err);
+        void                             addError(std::string&& str);
+        void                             addEvalIssue(const Config::SConfigError& err);
 
-        void                                     callLuaFn(const CLuaRef& fn, const std::function<int(lua_State*)>& pushArgs, int timeoutMs, std::string_view context);
-        std::expected<void, std::string>         registerLuaLayoutProvider(std::string name, lua_State* L, int providerTableIdx);
-        SDispatchResult                          callLuaFnBind(const CLuaRef& fn);
-        SP<SLuaStateLifetime>                    luaStateLifetime() const;
+        void                             callLuaFn(const CLuaRef& fn, const std::function<int(lua_State*)>& pushArgs, int timeoutMs, std::string_view context);
+        std::expected<void, std::string> registerLuaLayoutProvider(std::string name, lua_State* L, int providerTableIdx);
+        SDispatchResult                  callLuaFnBind(const CLuaRef& fn);
+        SP<SLuaStateLifetime>            luaStateLifetime() const;
 
         // execute an arbitrary lua string on the current state.
         std::optional<std::string>                           eval(const std::string& code, bool repl = false);
@@ -142,12 +142,12 @@ namespace Config::Lua {
             std::unordered_map<std::string, UP<ILuaConfigValue>> values;
         };
 
-        std::unordered_map<std::string, SDeviceConfig> m_deviceConfigs;
+        std::unordered_map<std::string, SDeviceConfig>       m_deviceConfigs;
 
         std::unordered_map<std::string, Config::SSeatConfig> m_seatConfigs;
 
-        std::vector<std::string>                       m_errors, m_configPaths, m_prints;
-        std::vector<Config::SConfigError>              m_evalIssues;
+        std::vector<std::string>                             m_errors, m_configPaths, m_prints;
+        std::vector<Config::SConfigError>                    m_evalIssues;
 
         // named window/layer rules for merge-on-redeclaration
         std::unordered_map<std::string, SP<Desktop::Rule::CWindowRule>> m_luaWindowRules;
