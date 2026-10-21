@@ -209,15 +209,15 @@ void CHyprBorderDecoration::updateState() {
         }
     }
 
-    const auto DEFAULTSEAT     = g_pSeatManager->defaultSeat();
+    const auto DEFAULTSEAT     = SeatManager::defaultSeat();
     const bool DEFAULTONWINDOW = PWINDOW == Desktop::focusState()->window() || (DEFAULTSEAT && PWINDOW == DEFAULTSEAT->m_hoverWindow.lock());
 
     // reserve up front: the contributor pointers below point into foreignTemps
-    foreignTemps.reserve(g_pSeatManager->seats().size());
+    foreignTemps.reserve(SeatManager::seats().size());
 
     size_t foreignIdx         = 0;
     bool   foreignContributed = false;
-    for (auto const& s : g_pSeatManager->seats()) {
+    for (auto const& s : SeatManager::seats()) {
         if (!s || s->isDefault())
             continue;
 

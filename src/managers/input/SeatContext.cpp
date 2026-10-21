@@ -84,10 +84,10 @@ namespace Input {
 
         // no seat manager yet (e.g. during early config parse/reload) or no
         // seats created: report no ambient seat, callers must fall back
-        if (!g_pSeatManager || g_pSeatManager->seats().empty())
+        if (!g_pSeatManager || SeatManager::seats().empty())
             return nullptr;
 
-        return g_pSeatManager->defaultSeat();
+        return SeatManager::defaultSeat();
     }
 
     std::string ambientSeatName() {
@@ -108,6 +108,11 @@ namespace Input {
     };
 
     SP<CSeat> seatForPid(pid_t pid) {
+        // no seat manager yet (unit tests, early startup): there is no seat
+        // to report, and callers treat a null seat as "no seat preference"
+        if (!g_pSeatManager || SeatManager::seats().empty())
+            return nullptr;
+
         // exact pid first, then walk ancestors: a bind like
         // exec_cmd("pkill rofi || true && rofi ...") registers only the
         // `/bin/sh -c` child with the triggering seat, while rofi itself
@@ -119,13 +124,13 @@ namespace Input {
             if (!NAME)
                 continue;
 
-            for (auto const& s : g_pSeatManager->seats()) {
+            for (auto const& s : SeatManager::seats()) {
                 if (s->name() == *NAME)
                     return s;
             }
 
             LOG(Log::WARN, "[seatmgr] seatForPid pid {} -> registry seat '{}' not found, default", cur, *NAME);
-            return g_pSeatManager->defaultSeat();
+            return SeatManager::defaultSeat();
         }
 
         LOG(Log::DEBUG, "[seatmgr] seatForPid pid {} -> no registry entry in {} process(es), default", pid, examined);
@@ -133,7 +138,7 @@ namespace Input {
         // the process tree gave nothing: the spawn marker survives even a
         // broken ancestry (re-parented launchers), so try the environment
         if (const auto NAME = seatNameFromEnviron(pid); NAME && !NAME->empty()) {
-            for (auto const& s : g_pSeatManager->seats()) {
+            for (auto const& s : SeatManager::seats()) {
                 if (s->name() == *NAME && !s->isDefault()) {
                     LOG(Log::DEBUG, "[seatmgr] seatForPid pid {} -> env seat '{}'", pid, *NAME);
                     return s;
@@ -141,7 +146,7 @@ namespace Input {
             }
         }
 
-        return g_pSeatManager->defaultSeat();
+        return SeatManager::defaultSeat();
     }
 
     SP<CSeat> seatForClient(wl_client* client) {

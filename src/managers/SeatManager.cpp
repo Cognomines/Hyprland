@@ -95,7 +95,10 @@ void CKeyboardEventHandlerStack::pruneHandlers() {
 CSeatManager::CSeatManager() {
     m_seats.emplace_back(makeShared<CSeat>(DEFAULT_SEAT_NAME, true));
 
-    m_listeners.newSeatResource = PROTO::seat->m_events.newSeatResource.listen([this](const auto& resource) { onNewSeatResource(resource); });
+    // the protocol manager may not exist yet (unit tests): there is no seat
+    // protocol to listen to, but the manager itself is still usable
+    if (PROTO::seat)
+        m_listeners.newSeatResource = PROTO::seat->m_events.newSeatResource.listen([this](const auto& resource) { onNewSeatResource(resource); });
 }
 
 SP<CSeat> CSeatManager::defaultSeat() {
@@ -104,6 +107,21 @@ SP<CSeat> CSeatManager::defaultSeat() {
 
 std::vector<SP<CSeat>>& CSeatManager::seats() {
     return m_seats;
+}
+
+namespace SeatManager {
+    std::vector<SP<CSeat>>& seats() {
+        static std::vector<SP<CSeat>> empty;
+        if (!g_pSeatManager)
+            return empty;
+        return g_pSeatManager->seats();
+    }
+
+    SP<CSeat> defaultSeat() {
+        if (!g_pSeatManager)
+            return nullptr;
+        return g_pSeatManager->defaultSeat();
+    }
 }
 
 SP<CSeat> CSeatManager::seatByName(const std::string& name) {
@@ -347,7 +365,7 @@ static void sendSyntheticKeyReleases(const SP<CSeat>& seat, const WP<CWLKeyboard
 
 static PHLWINDOW windowFromFocusSurface(SP<CWLSurfaceResource> surf);
 
-void CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf) {
+void             CSeatManager::setKeyboardFocus(SP<CSeat> seat, SP<CWLSurfaceResource> surf) {
     if (!seat || seat->isDefault()) {
         setKeyboardFocusDefault(surf);
         return;

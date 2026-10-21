@@ -315,7 +315,7 @@ void CInputManager::newTablet(SP<Aquamarine::ITablet> pDevice) {
 
 SP<CTabletTool> CInputManager::ensureTabletToolPresent(SP<Aquamarine::ITabletTool> pTool) {
 
-    for (auto const& s : g_pSeatManager->seats()) {
+    for (auto const& s : SeatManager::seats()) {
         for (auto const& t : s->m_tabletTools) {
             if (t->aq() == pTool)
                 return t;

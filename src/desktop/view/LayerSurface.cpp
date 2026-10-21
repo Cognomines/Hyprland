@@ -321,7 +321,7 @@ void CLayerSurface::onUnmap() {
     // mirroring the per-seat window focus-on-close path. Candidates come
     // from the seat's cursor monitor only (no layout candidate here).
     const auto LS_SURF = m_wlSurface->resource();
-    for (auto const& s : g_pSeatManager->seats()) {
+    for (auto const& s : SeatManager::seats()) {
         if (!s || s->isDefault() || s->m_keyboardFocus.lock() != LS_SURF)
             continue;
 
