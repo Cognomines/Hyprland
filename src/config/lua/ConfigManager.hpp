@@ -98,9 +98,9 @@ namespace Config::Lua {
         void                             addError(std::string&& str);
         void                             addEvalIssue(const Config::SConfigError& err);
 
-        std::expected<void, std::string>         registerLuaLayoutProvider(std::string name, lua_State* L, int providerTableIdx);
-        SP<SLuaStateLifetime>                    luaStateLifetime() const;
-        CLuaCaller&                              caller();
+        std::expected<void, std::string> registerLuaLayoutProvider(std::string name, lua_State* L, int providerTableIdx);
+        SP<SLuaStateLifetime>            luaStateLifetime() const;
+        CLuaCaller&                      caller();
 
         // execute an arbitrary lua string on the current state.
         std::optional<std::string>                           eval(const std::string& code, bool repl = false);
