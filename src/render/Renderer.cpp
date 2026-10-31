@@ -478,8 +478,12 @@ void IHyprRenderer::renderWorkspaceWindows(CRenderContext& ctx, PHLMONITOR pMoni
 }
 
 void IHyprRenderer::renderWorkspaceWindows(CRenderContext& ctx, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time, eSceneMode mode) {
-    PHLWINDOW  lastWindow;
-    const bool SPECIAL = pWorkspace->type() == Workspace::eWorkspaceType::SPECIAL;
+    static auto PFOCUSONTOP = CConfigValue<Config::BOOL>("general:focus_ontop");
+
+    PHLWINDOW   lastWindow;
+    const bool  SPECIAL = pWorkspace->type() == Workspace::eWorkspaceType::SPECIAL;
+    const auto  FOCUSED = Desktop::focusState()->window();
+    const bool  HOIST   = *PFOCUSONTOP;
 
     Event::bus()->m_events.render.stage.emit({RENDER_PRE_WINDOWS, pMonitor, ctx});
 
@@ -510,7 +514,7 @@ void IHyprRenderer::renderWorkspaceWindows(CRenderContext& ctx, PHLMONITOR pMoni
             continue;
 
         // render active window after all others of this pass
-        if (w == Desktop::focusState()->window()) {
+        if (w == FOCUSED) {
             lastWindow = w.lock();
             continue;
         }
@@ -521,10 +525,12 @@ void IHyprRenderer::renderWorkspaceWindows(CRenderContext& ctx, PHLMONITOR pMoni
             w.reset();
     }
 
-    if (lastWindow)
-        renderWindow(ctx, lastWindow, pMonitor, lastWindow->presentation().renderPresentation(mode), time, true, RENDER_PASS_MAIN);
+    if (!HOIST) {
+        if (lastWindow)
+            renderWindow(ctx, lastWindow, pMonitor, lastWindow->presentation().renderPresentation(mode), time, true, RENDER_PASS_MAIN);
 
-    lastWindow.reset();
+        lastWindow.reset();
+    }
 
     renderFadeouts(ctx, pMonitor, Desktop::FADEOUT_PLANE_WINDOW_TILED, pWorkspace, mode);
 
@@ -535,6 +541,10 @@ void IHyprRenderer::renderWorkspaceWindows(CRenderContext& ctx, PHLMONITOR pMoni
 
         if (w->isFloating())
             continue; // floating are in the second pass
+
+        // popups of the focused window are rendered together with it at the very end
+        if (HOIST && w == FOCUSED)
+            continue;
 
         // some things may force us to ignore the special/not special disparity
         const bool IGNORE_SPECIAL_CHECK = w->presentation().movingFromMonitor() && (w->m_workspace && !w->m_workspace->visible());
@@ -564,10 +574,20 @@ void IHyprRenderer::renderWorkspaceWindows(CRenderContext& ctx, PHLMONITOR pMoni
         if (SPECIAL && w->m_monitor != pWorkspace->m_monitor)
             continue; // special on another are rendered as a part of the base pass
 
+        // render active window after all others when general:focus_ontop is enabled
+        if (HOIST && w == FOCUSED) {
+            lastWindow = w.lock();
+            continue;
+        }
+
         // render the bad boy
         renderWindow(ctx, w.lock(), pMonitor, w->presentation().renderPresentation(mode), time, true, RENDER_PASS_ALL);
     }
     renderFadeouts(ctx, pMonitor, Desktop::FADEOUT_PLANE_WINDOW_FLOATING, pWorkspace, mode);
+
+    // the focused window renders above everything else on its workspace, tiled or floating
+    if (HOIST && lastWindow)
+        renderWindow(ctx, lastWindow, pMonitor, lastWindow->presentation().renderPresentation(mode), time, true, RENDER_PASS_ALL);
 }
 
 bool IHyprRenderer::bindOffMain(CRenderContext& ctx) {

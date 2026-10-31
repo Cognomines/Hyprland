@@ -4,6 +4,7 @@
 #include "../view/LayerSurface.hpp"
 #include "../view/WLSurface.hpp"
 #include "../view/window/Window.hpp"
+#include "../view/window/WindowPresentation.hpp"
 #include "../../config/ConfigValue.hpp"
 #include "../../layout/space/Space.hpp"
 #include "../../macros.hpp"
@@ -45,6 +46,7 @@ PHLWINDOW CViewHitTester::windowAtInternal(const Vector2D& pos, uint16_t propert
     static auto PSPECIALFALLTHRU      = CConfigValue<Config::INTEGER>("input:special_fallthrough");
     static auto PMODALPARENTBLOCKING  = CConfigValue<Config::INTEGER>("general:modal_parent_blocking");
     static auto PFOLLOWMOUSESHRINK    = CConfigValue<Config::INTEGER>("input:follow_mouse_shrink");
+    static auto PFOCUSONTOP           = CConfigValue<Config::BOOL>("general:focus_ontop");
     const auto  BORDER_GRAB_AREA      = *PRESIZEONBORDER ? *PBORDERSIZE + *PBORDERGRABEXTEND : 0;
     const bool  ONLY_PRIORITY         = properties & FOCUS_PRIORITY;
     const bool  DO_FOLLOW_MOUSE_CHECK = properties & FOLLOW_MOUSE_CHECK;
@@ -132,6 +134,54 @@ PHLWINDOW CViewHitTester::windowAtInternal(const Vector2D& pos, uint16_t propert
 
             return nullptr;
         };
+
+        // The focused window is rendered above everything else on its workspace
+        // (see IHyprRenderer::renderWorkspaceWindows), so hit-test it first to match
+        // what is actually drawn.
+        auto focusedFirst = [&]() -> PHLWINDOW {
+            if (!LASTFOCUSED || (properties & FLOATING_ONLY))
+                return nullptr;
+
+            if (ONLY_PRIORITY && !LASTFOCUSED->priorityFocus())
+                return nullptr;
+
+            if (!LASTFOCUSED->m_workspace || !LASTFOCUSED->mapped() || !LASTFOCUSED->acceptsInput() || LASTFOCUSED->shouldntFocus() ||
+                LASTFOCUSED->m_ruleApplicator->noFocus().valueOrDefault() || LASTFOCUSED == ignoreWindow || isShadowedByModal(LASTFOCUSED))
+                return nullptr;
+
+            // some things may force us to ignore the special/not special disparity
+            const bool IGNORE_SPECIAL_CHECK = LASTFOCUSED->presentation().movingFromMonitor() && !LASTFOCUSED->m_workspace->visible();
+
+            if (!IGNORE_SPECIAL_CHECK && special != LASTFOCUSED->onSpecialWorkspace())
+                return nullptr;
+
+            const bool ON_WORKSPACE = workspace ? LASTFOCUSED->m_workspace == workspace : LASTFOCUSED->m_workspace->visible();
+            if (!ON_WORKSPACE)
+                return nullptr;
+
+            if (special && LASTFOCUSED->m_monitor.lock() != PMONITOR)
+                return nullptr; // special on another monitor is rendered as a part of the base pass
+
+            // fullscreen workspaces use a different render path that does not hoist the focused window
+            const auto PWORKSPACEFS = workspace ? workspace : special ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace;
+            if (!(properties & SKIP_FULLSCREEN_PRIORITY) && Fullscreen::controller()->hasFullscreen(PWORKSPACEFS))
+                return nullptr;
+
+            CBox box = LASTFOCUSED->getWindowBoxUnified(properties).copy().expand(!LASTFOCUSED->backend().traits().overrideRedirect ? BORDER_GRAB_AREA : 0);
+            if (box.containsPoint(pos))
+                return LASTFOCUSED;
+
+            if (!LASTFOCUSED->backend().isX11() && LASTFOCUSED->hasPopupAt(pos))
+                return LASTFOCUSED;
+
+            return nullptr;
+        };
+
+        if ((properties & ALLOW_FLOATING) && *PFOCUSONTOP) {
+            auto focused = focusedFirst();
+            if (focused)
+                return focused;
+        }
 
         if (properties & ALLOW_FLOATING) {
             // first loop over floating cuz they're above, m_lWindows should be sorted bottom->top, for tiled it doesn't matter.
